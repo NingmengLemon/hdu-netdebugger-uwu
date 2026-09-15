@@ -136,27 +136,44 @@ make dev      # uv sync --all-groups --extra gui
 make lint     # ruff format --check + ruff check + ty check
 make fmt      # ruff check --fix + ruff format
 make test     # pytest（含覆盖率门槛 80%）
+make test-fast # pytest --no-cov
 make build    # uv build
 ```
 
 质量工具链：
 
 - **[uv](https://docs.astral.sh/uv/)** — 依赖与虚拟环境管理
-- **[ruff](https://docs.astral.sh/ruff/)** — lint + format（替代 flake8 / black / isort）
+- **[ruff](https://docs.astral.sh/ruff/)** — lint + format（替代 flake8 / black / isort），`select = ["ALL"]` + 逐条说明理由的 ignore
 - **[ty](https://docs.astral.sh/ty/)** — 类型检查（替代 mypy / pyright）
-- **pytest + pytest-asyncio + coverage** — 测试
+- **pytest + pytest-asyncio + coverage** — 380 个用例，覆盖率门槛 80%（当前 ~90%）
+
+所有网络调用都通过 `RunSession` 注入，因此测试用
+`tests/fakes.py` 里的 `FakePinger` / `FakeHttp` 就能在毫秒内跑完 8 个检查项，
+不产生任何真实流量，也不需要联网。GUI 用 Qt 的 `offscreen` 平台插件离屏测试。
+
+CI（`.github/workflows/ci.yml`）在 push / PR 时跑：
+
+- `ruff format --check` + `ruff check` + `ty check`
+- Ubuntu / Windows / macOS × Python 3.12 / 3.13 的完整测试矩阵
+- `uv build` 后把 wheel 装进干净虚拟环境，验证 `hnd --version` / `hnd list` 可用
 
 ## 与 C# 原版的差异
 
 | 原版 | 本复刻 |
 |------|--------|
-| C# 特性 + 反射扫描注册检查项 | Python 装饰器 `@checker(...)` 注册，显式可读 |
+| C# 特性 + 反射扫描注册检查项 | Python 装饰器 `@checker(...)` 注册，显式可读；条件用 `@condition(...)`，且支持子类覆盖 |
 | `ConcurrentDictionary<string, object> GlobalFlagList` | 强类型 `CheckContext` 数据类 |
-| `System.Net.NetworkInformation.Ping` | `icmplib` 原始套接字，**失败时回退系统 `ping` 命令**（免管理员权限） |
+| `System.Net.NetworkInformation.Ping` | 三级后端：`icmplib` 原始套接字 → Win32 `IcmpSendEcho2` → 系统 `ping` 命令，自动降级 |
 | `DnsClient` | `dnspython` 异步解析器，可指定 DNS 服务器 |
 | `HttpClient` | `httpx.AsyncClient`（默认不跟随重定向、不保留 Cookie） |
 | MVVM + Avalonia | Typer CLI（主）+ PySide6 可选 GUI |
-| 无测试 | pytest 测试套件 + GitHub Actions CI |
+| 无测试 | 380 个 pytest 用例 + GitHub Actions CI |
+
+实现过程中还修正了原版的两处小问题：
+
+- `AddWarning("")` 会把结论从"通过"提升为"警告"，却一条警告都没记录 —— 现在空白消息不再改变状态。
+- 检查项的"命名空间更深者覆盖前者"是隐式行为，现在改成语义明确的 `override=True`，
+  重名注册默认直接报错，不会静默失效。
 
 ## License
 

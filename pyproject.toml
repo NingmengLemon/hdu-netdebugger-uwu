@@ -113,6 +113,7 @@ ignore = [
     "ANN",     # no annotations required in tests
     "ARG001",  # unused fixture arguments
     "ARG002",  # unused method arguments (mock stubs)
+    "ARG005",  # unused lambda arguments (替身要匹配被替换函数/方法的签名)
     "PLR0904", # too many public methods in a test class
     "PT011",   # pytest.raises too broad
     "S101",    # assert is the pytest idiom

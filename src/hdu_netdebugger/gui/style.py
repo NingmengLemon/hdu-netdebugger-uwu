@@ -147,6 +147,7 @@ QScrollArea > QWidget > QWidget {{
 }}
 #CheckCardStatusIcon {{
     background: transparent;
+    color: {TEXT_MUTED};
     font-size: 15px;
 }}
 #CheckCardName {{

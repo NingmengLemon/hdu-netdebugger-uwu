@@ -40,6 +40,7 @@ __all__ = [
 ]
 
 CheckerT = TypeVar("CheckerT", bound="Checker")
+ConditionT = TypeVar("ConditionT", bound="Callable[..., object]")
 
 #: 条件函数被标记时写入的属性名
 _CONDITION_ATTR = "__hnd_condition_name__"
@@ -78,14 +79,16 @@ class CheckerSpec:
 _REGISTRY: dict[str, CheckerSpec] = {}
 
 
-def condition(name: str) -> Callable[[object], object]:
+def condition(name: str) -> Callable[[ConditionT], ConditionT]:
     """把方法标记为检查项的前置条件。
+
+    返回值保持原函数的类型，因此 ``self._ready()`` 这样的直接调用依然能被类型检查器看懂。
 
     Args:
         name: 条件的可读名称，会出现在"跳过原因"里。
     """
 
-    def decorator(func: object) -> object:
+    def decorator(func: ConditionT) -> ConditionT:
         setattr(func, _CONDITION_ATTR, name)
         return func
 
@@ -135,13 +138,18 @@ def checker(
 
 
 def _collect_conditions(cls: type[Checker]) -> tuple[ConditionSpec, ...]:
-    """按定义顺序收集被 :func:`condition` 标记的方法。"""
-    specs: list[ConditionSpec] = []
-    for member in vars(cls).values():
-        label = getattr(member, _CONDITION_ATTR, None)
-        if label is not None:
-            specs.append(ConditionSpec(name=str(label), func=member))
-    return tuple(specs)
+    """收集被 :func:`condition` 标记的方法，含继承来的。
+
+    按 MRO 从基类到派生类遍历，并按条件名去重 —— 子类可以用同名条件覆盖父类的实现，
+    这与原版"命名空间更深者覆盖前者、平台特化版本优先"的设计意图一致。
+    """
+    collected: dict[str, ConditionSpec] = {}
+    for klass in reversed(cls.__mro__):
+        for member in vars(klass).values():
+            label = getattr(member, _CONDITION_ATTR, None)
+            if label is not None:
+                collected[str(label)] = ConditionSpec(name=str(label), func=member)
+    return tuple(collected.values())
 
 
 def all_checkers() -> list[CheckerSpec]:

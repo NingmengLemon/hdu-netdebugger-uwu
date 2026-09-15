@@ -71,11 +71,16 @@ class CheckResultBuilder:
     # -- 附加信息 ---------------------------------------------------------
 
     def add_warning(self, message: str) -> CheckResultBuilder:
-        """追加一条警告；同时把 ``PASS`` 提升为 ``WARN``。"""
+        """追加一条警告；同时把 ``PASS`` 提升为 ``WARN``。
+
+        注意：只有非空白消息才会提升状态。原版即使传入空白字符串也会把
+        ``Pass`` 改成 ``Warn``，那会产出"状态是警告但一条警告都没有"的结果，
+        这里刻意做了修正。
+        """
         if message.strip() and message not in self._warnings:
             self._warnings.append(message)
-        if self._status is CheckResultStatus.PASS:
-            self._status = CheckResultStatus.WARN
+            if self._status is CheckResultStatus.PASS:
+                self._status = CheckResultStatus.WARN
         return self
 
     def add_suggestion(self, suggestion: str) -> CheckResultBuilder:

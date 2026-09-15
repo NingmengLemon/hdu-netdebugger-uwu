@@ -63,6 +63,7 @@ class CheckCard(QFrame):
 
         self._spec = spec
         self._outcome: CheckOutcome | None = None
+        self._expanded = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -172,17 +173,22 @@ class CheckCard(QFrame):
 
     def toggle(self) -> None:
         """切换展开状态。"""
-        self.set_expanded(not self._body.isVisible())
+        self.set_expanded(not self._expanded)
 
     def set_expanded(self, expanded: bool) -> None:
-        """展开/收起正文（失败与警告项会自动展开，与原版一致）。"""
+        """展开/收起正文（失败与警告项会自动展开，与原版一致）。
+
+        展开状态由自己记录，不用 ``QWidget.isVisible()`` —— 后者在窗口尚未
+        ``show()`` 时恒为 ``False``（可见性要所有祖先都可见才成立）。
+        """
+        self._expanded = expanded
         self._toggle.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
         self._body.setVisible(expanded)
 
     @property
     def is_expanded(self) -> bool:
         """当前是否展开。"""
-        return self._body.isVisible()
+        return self._expanded
 
     # -- 状态更新 ---------------------------------------------------------
 
