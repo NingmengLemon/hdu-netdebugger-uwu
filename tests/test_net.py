@@ -2,20 +2,29 @@
 
 from __future__ import annotations
 
+import asyncio
+import ctypes
+import socket
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from ipaddress import IPv4Address
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
 import dns.asyncresolver
 import dns.exception
 import dns.rdatatype
 import dns.resolver
+import psutil
 import pytest
+from icmplib import ICMPRequest
+from icmplib import exceptions as icmp_errors
 
 from hdu_netdebugger.config import RunConfig
 from hdu_netdebugger.models.enums import PingStatus
 from hdu_netdebugger.models.interface import InterfaceInfo, InterfaceKind
 from hdu_netdebugger.models.ping import MultiPingResult, PingReply
+from hdu_netdebugger.net import interfaces as interfaces_module
 from hdu_netdebugger.net import ping as ping_module
 from hdu_netdebugger.net.dns import DnsResult, query_a
 from hdu_netdebugger.net.http import HttpClient, HttpResponse
@@ -30,6 +39,9 @@ from hdu_netdebugger.net.ping import (
 )
 from hdu_netdebugger.session import RunSession
 from tests.fakes import FakeHttp
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 def ok_result(address: str) -> MultiPingResult:
@@ -210,6 +222,117 @@ class TestSystemPingArgs:
         args = ping_module._system_ping_args("1.1.1.1", PingOptions(count=3, timeout_s=2.0))
         assert args[:2] == ["-c", "3"]
 
+    def test_linux_flags_take_timeout_in_seconds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Linux/GNU 的 ``-W`` 是**秒**；``-t`` 是 TTL。"""
+        monkeypatch.setattr(ping_module.sys, "platform", "linux")
+        options = PingOptions(count=3, timeout_s=2.0, payload_size=32, ttl=64, interval_s=0.5)
+        assert ping_module._system_ping_args("1.1.1.1", options) == [
+            "-c",
+            "3",
+            "-W",
+            "2",
+            "-s",
+            "32",
+            "-t",
+            "64",
+            "-i",
+            "0.5",
+            "1.1.1.1",
+        ]
+
+    def test_darwin_flags_take_timeout_in_milliseconds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """BSD/macOS 的 ``-W`` 是**毫秒**；``-m`` 是 TTL。
+
+        这是最容易抄错的一处（毫秒/秒写反会让超时行为差 1000 倍），
+        而手上没有 Mac，所以用改 ``sys.platform`` 的方式把参数拼装钉死。
+        """
+        monkeypatch.setattr(ping_module.sys, "platform", "darwin")
+        options = PingOptions(count=3, timeout_s=2.0, payload_size=32, ttl=64, interval_s=0.5)
+        assert ping_module._system_ping_args("1.1.1.1", options) == [
+            "-c",
+            "3",
+            "-W",
+            "2000",
+            "-s",
+            "32",
+            "-m",
+            "64",
+            "-i",
+            "0.5",
+            "1.1.1.1",
+        ]
+
+
+class TestSystemPingProcess:
+    """系统 ``ping`` 后端的进程管道：找不到可执行文件 / 超时 / 正常返回。"""
+
+    async def test_missing_executable_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def fake_exec(*_args: object, **_kwargs: object) -> object:
+            raise FileNotFoundError("ping")
+
+        monkeypatch.setattr(ping_module.asyncio, "create_subprocess_exec", fake_exec)
+
+        with pytest.raises(BackendUnavailable, match="没有可用的 ping 命令"):
+            await ping_module._system_ping("1.1.1.1", PingOptions(count=1))
+
+    async def test_success_decodes_and_parses_output(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        seen: list[tuple[str, ...]] = []
+
+        class _Process:
+            async def communicate(self) -> tuple[bytes, None]:
+                return WINDOWS_OUTPUT.encode(), None
+
+        async def fake_exec(*args: str, **_kwargs: object) -> _Process:
+            seen.append(args)
+            return _Process()
+
+        monkeypatch.setattr(ping_module.asyncio, "create_subprocess_exec", fake_exec)
+
+        result = await ping_module._system_ping("127.0.0.1", PingOptions(count=2))
+
+        assert result.success_count == 2
+        assert seen
+        assert seen[0][0] == "ping"
+        assert "127.0.0.1" in seen[0]
+
+    async def test_timeout_kills_the_process(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        killed: list[bool] = []
+
+        class _HangingProcess:
+            async def communicate(self) -> tuple[bytes, None]:
+                await asyncio.sleep(60)
+                return b"", None
+
+            def kill(self) -> None:
+                killed.append(True)
+
+            async def wait(self) -> int:
+                return 0
+
+        async def fake_exec(*_args: object, **_kwargs: object) -> _HangingProcess:
+            return _HangingProcess()
+
+        real_wait_for = asyncio.wait_for
+
+        async def capped(awaitable: Any, timeout: float) -> Any:  # noqa: ASYNC109 - 包装 wait_for
+            # 真实预算是 timeout_s * count + 5s，对单测太长。这里只把等待时间压到 50ms，
+            # 被测的仍然是"超时 → kill() → wait()"这条分支本身。
+            del timeout
+            return await real_wait_for(awaitable, 0.05)
+
+        monkeypatch.setattr(ping_module.asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(ping_module.asyncio, "wait_for", capped)
+
+        with pytest.raises(BackendUnavailable, match="系统 ping 命令超时"):
+            await ping_module._system_ping("1.1.1.1", PingOptions(count=1))
+
+        assert killed == [True]
+
 
 # ---------------------------------------------------------------------------
 # 后端选择与降级
@@ -324,6 +447,178 @@ class TestWindowsIcmpHelpers:
         assert ping_module._ipaddr_network_order("192.0.2.1") != int(IPv4Address("192.0.2.1"))
 
 
+class _WindowsReplyStub:
+    """替代 ``ICMP_ECHO_REPLY``：``_classify_windows_reply`` 只用到这两个字段。"""
+
+    Status = 0
+    RoundTripTime = 0
+
+    @classmethod
+    def from_buffer(cls, _buffer: object) -> type[_WindowsReplyStub]:
+        return cls
+
+    @classmethod
+    def with_values(cls, status: int, rtt: int = 0) -> type[_WindowsReplyStub]:
+        return type("_WindowsReplyStub", (cls,), {"Status": status, "RoundTripTime": rtt})
+
+
+class TestWindowsReplyClassification:
+    """``IcmpSendEcho`` 的返回值 → :class:`PingReply`。
+
+    诊断结论（超时 / 不可达 / 出错）全靠这条映射，而它此前完全没有测试 ——
+    H1 那个"地址字节序反了"的缺陷之所以能活下来，就是因为这里没闸门。
+    """
+
+    def test_success_carries_rtt_and_sequence(self) -> None:
+        reply = ping_module._classify_windows_reply(1, b"", _WindowsReplyStub.with_values(0, 7), 3)
+        assert reply.status is PingStatus.SUCCESS
+        assert reply.rtt_ms == 7.0
+        assert reply.sequence == 3
+        assert reply.ok is True
+
+    def test_status_timeout(self) -> None:
+        reply = ping_module._classify_windows_reply(
+            1, b"", _WindowsReplyStub.with_values(ping_module._IP_REQ_TIMED_OUT), 1
+        )
+        assert reply.status is PingStatus.TIMEOUT
+        assert reply.rtt_ms is None
+
+    @pytest.mark.parametrize("status", [11002, 11003, 11004, 11005, 11018, 11013, 11014])
+    def test_unreachable_and_ttl_expired(self, status: int) -> None:
+        reply = ping_module._classify_windows_reply(
+            1, b"", _WindowsReplyStub.with_values(status), 1
+        )
+        assert reply.status is PingStatus.UNREACHABLE
+        assert f"IP_STATUS={status}" in (reply.error or "")
+
+    def test_unknown_status_is_error(self) -> None:
+        reply = ping_module._classify_windows_reply(1, b"", _WindowsReplyStub.with_values(12345), 1)
+        assert reply.status is PingStatus.ERROR
+
+    def test_sent_zero_with_timeout_error_code(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(ctypes, "get_last_error", lambda: ping_module._IP_REQ_TIMED_OUT)
+        reply = ping_module._classify_windows_reply(0, b"", _WindowsReplyStub, 1)
+        assert reply.status is PingStatus.TIMEOUT
+
+    def test_sent_zero_with_other_error_code(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(ctypes, "get_last_error", lambda: 87)
+        reply = ping_module._classify_windows_reply(0, b"", _WindowsReplyStub, 1)
+        assert reply.status is PingStatus.ERROR
+        assert "87" in (reply.error or "")
+
+
+class _IcmpRequestStub:
+    def __init__(self, sent_at: float) -> None:
+        self.time = sent_at
+
+
+class _IcmpReplyStub:
+    def __init__(self, replied_at: float, error: BaseException | None = None) -> None:
+        self.time = replied_at
+        self.error = error
+
+    def raise_for_status(self) -> None:
+        if self.error is not None:
+            raise self.error
+
+
+class _IcmpSocketStub:
+    """只实现 icmplib 套接字协议里那几个方法的替身。"""
+
+    def __init__(
+        self,
+        *,
+        reply: object = None,
+        receive_error: BaseException | None = None,
+    ) -> None:
+        self.reply = reply
+        self.receive_error = receive_error
+        self.sent = 0
+
+    def send(self, request: ICMPRequest) -> None:
+        # 参数名必须与 icmplib 的套接字协议一致（ty 会按协议校验关键字兼容性）
+        del request
+        self.sent += 1
+
+    def receive(self, request: ICMPRequest, timeout: float) -> object:
+        del request, timeout
+        if self.receive_error is not None:
+            raise self.receive_error
+        return self.reply
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return
+
+
+class _ErrorCodeStub:
+    """``DestinationUnreachable`` / ``TimeExceeded`` 需要 ``reply.code``。"""
+
+    code = 1
+
+
+class TestIcmplibReplyClassification:
+    """icmplib 的异常 → :class:`PingReply` 的映射。"""
+
+    def _send(
+        self,
+        sock: _IcmpSocketStub,
+        *,
+        sent_at: float = 1.0,
+        sequence: int = 1,
+    ) -> PingReply:
+        return ping_module._icmplib_send_one(
+            sock,
+            cast("ICMPRequest", _IcmpRequestStub(sent_at)),
+            1.0,
+            sequence,
+        )
+
+    def test_success_computes_rtt(self) -> None:
+        sock = _IcmpSocketStub(reply=_IcmpReplyStub(replied_at=1.05))
+
+        reply = self._send(sock, sequence=2)
+
+        assert reply.status is PingStatus.SUCCESS
+        assert reply.rtt_ms == pytest.approx(50.0)
+        assert reply.sequence == 2
+        assert sock.sent == 1
+
+    def test_negative_elapsed_is_clamped_to_zero(self) -> None:
+        sock = _IcmpSocketStub(reply=_IcmpReplyStub(replied_at=0.5))
+        assert self._send(sock).rtt_ms == 0.0
+
+    def test_timeout_maps_to_timeout(self) -> None:
+        sock = _IcmpSocketStub(receive_error=icmp_errors.TimeoutExceeded(1.0))
+        assert self._send(sock).status is PingStatus.TIMEOUT
+
+    def test_destination_unreachable_maps_to_unreachable(self) -> None:
+        sock = _IcmpSocketStub(
+            reply=_IcmpReplyStub(2.0, icmp_errors.DestinationUnreachable(_ErrorCodeStub()))
+        )
+
+        reply = self._send(sock)
+
+        assert reply.status is PingStatus.UNREACHABLE
+        assert "unreachable" in (reply.error or "")
+
+    def test_time_exceeded_maps_to_unreachable(self) -> None:
+        sock = _IcmpSocketStub(
+            reply=_IcmpReplyStub(2.0, icmp_errors.TimeExceeded(_ErrorCodeStub()))
+        )
+        assert self._send(sock).status is PingStatus.UNREACHABLE
+
+    def test_other_icmp_error_maps_to_error(self) -> None:
+        sock = _IcmpSocketStub(reply=_IcmpReplyStub(2.0, icmp_errors.ICMPLibError("boom")))
+
+        reply = self._send(sock)
+
+        assert reply.status is PingStatus.ERROR
+        assert "boom" in (reply.error or "")
+
+
 class TestLoopbackReachable:
     async def test_loopback_always_reachable(self) -> None:
         """无论自动选中哪个后端，回环地址都必须可达。"""
@@ -386,6 +681,45 @@ class TestHttpResponse:
         assert "失败" in HttpResponse("http://x", 0, {}, "", 0.1, error="e").describe()
 
 
+@pytest.fixture
+def local_http_server() -> Iterator[str]:
+    """只监听回环的极简 HTTP 服务，让 httpx 的成功路径真的跑一遍。"""
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if self.path == "/no-content":
+                self.send_response(204)
+                self.end_headers()
+                return
+            if self.path == "/redirect":
+                self.send_response(302)
+                # Location 里刻意塞方括号：它会一路变成检查项警告，用来盯住渲染转义
+                self.send_header("Location", "http://portal.example/[red]login")
+                self.end_headers()
+                return
+            body = "hello 中文".encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("X-Probe", "yes")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A002 - 基类签名
+            """静音访问日志。"""
+            del format, args
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 class TestHttpClient:
     async def test_network_error_is_captured(self) -> None:
         async with HttpClient(timeout_s=0.5) as client:
@@ -394,6 +728,31 @@ class TestHttpClient:
         assert response.status_code == 0
         assert response.error is not None
         assert "失败" in response.describe()
+
+    async def test_success_returns_status_headers_and_text(
+        self,
+        local_http_server: str,
+    ) -> None:
+        """成功路径此前**从未被执行过**（所有检查项都注入 FakeHttp）。"""
+        async with HttpClient(timeout_s=5.0, trust_env_proxy=False) as client:
+            response = await client.get(f"{local_http_server}/")
+
+        assert response.ok
+        assert response.status_code == 200
+        assert response.text == "hello 中文"
+        assert response.headers["x-probe"] == "yes"
+        assert response.elapsed_s >= 0.0
+        assert response.describe() == f"请求 {local_http_server}/ 返回 HTTP 200"
+
+    async def test_no_content_and_redirect_flags(self, local_http_server: str) -> None:
+        async with HttpClient(timeout_s=5.0, trust_env_proxy=False) as client:
+            no_content = await client.get(f"{local_http_server}/no-content")
+            redirect = await client.get(f"{local_http_server}/redirect")
+
+        assert no_content.is_no_content
+        assert no_content.status_code == 204
+        assert redirect.is_redirect
+        assert redirect.headers["location"] == "http://portal.example/[red]login"
 
 
 # ---------------------------------------------------------------------------
@@ -555,6 +914,89 @@ class TestListInterfaces:
     def test_sorted_by_name(self) -> None:
         names = [item.name for item in list_interfaces()]
         assert names == sorted(names)
+
+    def test_filters_loopback_and_sorts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """用固定样本验证过滤与排序。
+
+        上面三条断言针对真实网卡，对空列表恒真 —— 这里补一条不依赖环境的。
+        """
+        sample = [
+            InterfaceInfo(
+                name="b-if",
+                description="",
+                kind=InterfaceKind.ETHERNET,
+                is_up=True,
+                ipv4=("10.0.0.2",),
+            ),
+            InterfaceInfo(
+                name="a-lo",
+                description="",
+                kind=InterfaceKind.LOOPBACK,
+                is_up=True,
+                ipv4=("127.0.0.1",),
+            ),
+            InterfaceInfo(name="c-tun", description="", kind=InterfaceKind.TUNNEL, is_up=True),
+        ]
+        monkeypatch.setattr(interfaces_module, "_windows_interfaces", lambda: sample)
+        monkeypatch.setattr(interfaces_module, "_psutil_interfaces", lambda: sample)
+
+        assert [item.name for item in list_interfaces()] == ["b-if", "c-tun"]
+        assert [item.name for item in list_interfaces(include_loopback=True)] == [
+            "a-lo",
+            "b-if",
+            "c-tun",
+        ]
+
+    def test_psutil_fallback_maps_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``psutil`` 回退分支（非 Windows 平台的唯一路径）此前完全没有测试。"""
+
+        def addr(family: int, address: str) -> object:
+            return type("_Addr", (), {"family": family, "address": address})()
+
+        def stat(*, isup: bool, mtu: int, speed: int) -> object:
+            return type("_Stat", (), {"isup": isup, "mtu": mtu, "speed": speed})()
+
+        monkeypatch.setattr(
+            psutil,
+            "net_if_addrs",
+            lambda: {
+                "enp3s0": [
+                    addr(socket.AF_INET, "10.0.0.5"),
+                    addr(socket.AF_INET6, "fe80::1%enp3s0"),
+                ],
+                "wlan0": [addr(socket.AF_INET, "10.0.0.9")],
+            },
+        )
+        monkeypatch.setattr(
+            psutil,
+            "net_if_stats",
+            lambda: {
+                "enp3s0": stat(isup=True, mtu=1500, speed=1000),
+                "wlan0": stat(isup=False, mtu=1500, speed=0),
+            },
+        )
+
+        found = {item.name: item for item in interfaces_module._psutil_interfaces()}
+
+        wired = found["enp3s0"]
+        assert wired.kind is InterfaceKind.ETHERNET
+        assert wired.ipv4 == ("10.0.0.5",)
+        assert wired.ipv6 == ("fe80::1",), "IPv6 的 scope id 应当被剥掉"
+        assert wired.mtu == 1500
+        assert wired.speed_mbps == 1000
+        assert wired.is_up is True
+
+        wireless = found["wlan0"]
+        assert wireless.kind is InterfaceKind.WIRELESS
+        assert wireless.is_up is False
+        assert wireless.speed_mbps is None
+
+    @pytest.mark.parametrize(
+        ("bits_per_second", "expected"),
+        [(0, None), (-1, None), (100_000, 1), (1_000_000, 1), (1_000_000_000, 1000)],
+    )
+    def test_link_speed_conversion(self, bits_per_second: int, expected: int | None) -> None:
+        assert interfaces_module._link_speed_mbps(bits_per_second) == expected
 
     @pytest.mark.parametrize(
         ("name", "expected"),
