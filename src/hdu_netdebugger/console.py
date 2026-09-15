@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from rich.console import Console, Group
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -74,16 +75,22 @@ class ConsoleReporter:
             self._render_details(outcome)
 
     def _render_details(self, outcome: CheckOutcome) -> None:
-        """缩进输出单项的警告 / 建议 / 详细日志。"""
+        """缩进输出单项的警告 / 建议 / 详细日志。
+
+        警告 / 建议 / 详细日志里装的是**网络原文**（重定向 Location、代理地址、
+        接口描述、异常消息……）。它们直接拼进 rich 的 markup 字符串时，方括号会被
+        当成样式标签：``[red]`` 被静默吃掉（打印出来的 URL 与真实的不同），
+        ``[/]`` 更会让 rich 抛 ``MarkupError`` 把 ``-v`` 直接弄崩。所以一律转义。
+        """
         for warning in outcome.warnings:
-            self.console.print(f"    [yellow]警告:[/] {warning}")
+            self.console.print(f"    [yellow]警告:[/] {escape(warning)}")
         for suggestion in outcome.suggestions:
-            self.console.print(f"    [cyan]建议:[/] {suggestion}")
+            self.console.print(f"    [cyan]建议:[/] {escape(suggestion)}")
         if outcome.skipped_reason:
-            self.console.print(f"    [dim]跳过原因: {outcome.skipped_reason}[/]")
+            self.console.print(f"    [dim]跳过原因: {escape(outcome.skipped_reason)}[/]")
         if outcome.details:
             for raw in outcome.details.splitlines():
-                self.console.print(f"    [dim]│ {raw}[/]")
+                self.console.print(f"    [dim]│ {escape(raw)}[/]")
 
     # -- 汇总 -------------------------------------------------------------
 
@@ -184,7 +191,7 @@ def render_doctor(items: list[tuple[str, str, bool, str]]) -> RenderableType:
     for label, value, ok, note in items:
         table.add_row(
             label,
-            value,
+            escape(value),  # 依赖探测的失败信息里可能带方括号
             Text("✔", style="green") if ok else Text("✖", style="red"),
         )
         if note:

@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
 import typer
+from rich.markup import escape
 from typer import _click  # Typer 0.27 起把 click 内联为 typer._click，用法错误要按它的类型捕获
 from typer.core import TyperGroup
 
@@ -348,7 +349,7 @@ def _emit(
     path = Path(output)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(built, encoding="utf-8")
-    make_console().print(f"[green]✔[/] 报告已写入 [bold]{path}[/]")
+    make_console().print(f"[green]✔[/] 报告已写入 [bold]{escape(str(path))}[/]")
 
 
 @app.command("list")
