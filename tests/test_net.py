@@ -304,6 +304,25 @@ class TestWindowsIcmpHelpers:
         assert 11018 in ping_module._IP_UNREACHABLE
         assert 11013 in ping_module._IP_TTL_EXPIRED
 
+    @pytest.mark.parametrize(
+        ("address", "expected"),
+        [
+            ("127.0.0.1", 0x0100007F),
+            ("192.0.2.1", 0x012810AC),
+            ("10.150.0.1", 0x0100960A),
+            ("223.5.5.5", 0x050505DF),
+            ("0.0.0.0", 0x00000000),  # noqa: S104 - 只是地址编码测试向量, 不涉及绑定
+            ("255.255.255.255", 0xFFFFFFFF),
+        ],
+    )
+    def test_ipaddr_is_network_order(self, address: str, expected: int) -> None:
+        """``IcmpSendEcho`` 的 ``DestinationAddress`` 要网络序 ``IPAddr``，不是主机序整数。"""
+        assert ping_module._ipaddr_network_order(address) == expected
+
+    def test_ipaddr_differs_from_host_order_int(self) -> None:
+        """回归：旧实现用 ``int(IPv4Address(...))``，会把 192.0.2.1 实际打成 1.40.16.172。"""
+        assert ping_module._ipaddr_network_order("192.0.2.1") != int(IPv4Address("192.0.2.1"))
+
 
 class TestLoopbackReachable:
     async def test_loopback_always_reachable(self) -> None:
@@ -311,6 +330,37 @@ class TestLoopbackReachable:
         result = await ping_multiple("127.0.0.1", PingOptions(count=2, timeout_s=1.0))
         assert result.success_count == 2
         assert result.avg_rtt_ms >= 0
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="IcmpSendEcho 仅在 Windows 上可用")
+class TestWindowsIcmpBackend:
+    """真机验证 ``IcmpSendEcho`` 路径。
+
+    旧实现的地址字节序错误会让这两条用例失败：回环会打到 1.0.0.127（时延虚高）或直接超时，
+    本机地址则稳定超时。
+    """
+
+    async def test_loopback_is_successful_and_fast(self) -> None:
+        result = await ping_multiple(
+            "127.0.0.1", PingOptions(count=2, timeout_s=1.0), backend=Backend.WINDOWS_ICMP
+        )
+        assert result.success_count == 2
+        assert result.avg_rtt_ms < 5.0
+
+    async def test_own_address_is_reachable(self) -> None:
+        candidates = [
+            address
+            for item in list_interfaces()
+            if item.is_up
+            for address in item.ipv4
+            if not address.startswith("169.254.")
+        ]
+        if not candidates:
+            pytest.skip("本机没有可用的 IPv4 地址")
+        result = await ping_multiple(
+            candidates[0], PingOptions(count=1, timeout_s=1.0), backend=Backend.WINDOWS_ICMP
+        )
+        assert result.success_count == 1
 
 
 # ---------------------------------------------------------------------------

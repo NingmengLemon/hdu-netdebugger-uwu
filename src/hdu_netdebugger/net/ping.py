@@ -5,11 +5,10 @@
 因此这里做三级后端：
 
 1. :data:`Backend.ICMPLIB` —— `icmplib <https://github.com/ValentinBELYN/icmplib>`_ 的 ICMP 套接字。
-   Windows 上走 ``SOCK_RAW``（与 .NET 一致，时延精确），Unix 上非特权模式走 ``SOCK_DGRAM``；
-   缺少权限时抛 :class:`BackendUnavailable` 自动降级。
-2. :data:`Backend.WINDOWS_ICMP` —— ctypes 调用 ``iphlpapi!IcmpSendEcho2``，**无需任何权限**，
-   在 Windows 上永远可用。代价是 ``ICMP.DLL`` 的同步路径自带约 70ms 的内部计时常量，
-   时延读数会偏高，因此排在原始套接字之后作为保底。
+   Windows 上走 ``SOCK_RAW``（与 .NET ``Ping`` 一致，时延读数与系统 ``ping`` 相符），
+   Unix 上非特权模式走 ``SOCK_DGRAM``；缺少权限时抛 :class:`BackendUnavailable` 自动降级。
+2. :data:`Backend.WINDOWS_ICMP` —— ctypes 调用 ``iphlpapi!IcmpSendEcho``，**无需任何权限**，
+   因此是 Windows 上非管理员用户的保底路径（原始套接字需要管理员权限）。
 3. :data:`Backend.SYSTEM` —— 兜底调用系统 ``ping`` 命令并解析输出，任何平台都能跑。
 
 :data:`Backend.AUTO` 会按上面顺序依次尝试，并把探测成功的后端缓存下来，避免每次都走失败路径。
@@ -164,8 +163,8 @@ async def _dispatch(address: str, opts: PingOptions, backend: Backend) -> MultiP
 def _auto_order() -> tuple[Backend, ...]:
     """按平台给出后端尝试顺序。
 
-    Windows 上 ``IcmpSendEcho2`` 虽然永远可用，但其同步路径自带约 70ms 计时误差，
-    因此把需要权限但时延精确的原始套接字排在前面，仅在无权限时才降级。
+    Windows 上把 ``icmplib`` 排在前面：它和 .NET ``Ping`` 一样走原始套接字；
+    ``IcmpSendEcho`` 退居其次，只作为拿不到原始套接字（非管理员）时的保底。
     """
     if sys.platform == "win32":
         return (Backend.ICMPLIB, Backend.WINDOWS_ICMP, Backend.SYSTEM)
@@ -190,6 +189,17 @@ _IP_SUCCESS = 0
 _IP_REQ_TIMED_OUT = 11010
 _IP_UNREACHABLE = frozenset({11002, 11003, 11004, 11005, 11018})
 _IP_TTL_EXPIRED = frozenset({11013, 11014})
+
+
+def _ipaddr_network_order(address: str) -> int:
+    """把点分十进制地址转成 ``IcmpSendEcho`` 要求的网络序 ``IPAddr``。
+
+    ``IPAddr`` 是个 ``ULONG``，但它的**内存布局**必须是网络序字节 —— 也就是说小端机器上
+    192.0.2.1 对应的数值是 ``0x012810AC``。若直接用 ``int(IPv4Address(address))``
+    （把点分十进制当主机序整数解释）会得到字节反过来的 ``0xAC102801``，
+    实际去 ping 的是另一个地址：可达目标会报超时，连回环地址都 ping 不到本机。
+    """
+    return int.from_bytes(IPv4Address(address).packed, "little")
 
 
 def _windows_icmp_ping(address: str, opts: PingOptions) -> MultiPingResult:
@@ -254,7 +264,7 @@ def _windows_icmp_ping(address: str, opts: PingOptions) -> MultiPingResult:
             Ttl=opts.ttl, Tos=0, Flags=0, OptionsSize=0, OptionsData=None
         )
         timeout_ms = max(1, round(opts.timeout_s * 1000))
-        destination = int(IPv4Address(address))
+        destination = _ipaddr_network_order(address)
 
         replies: list[PingReply] = []
         for sequence in range(1, opts.count + 1):
