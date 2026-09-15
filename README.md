@@ -99,8 +99,19 @@ uv run hnd gui
 uv run python -m hdu_netdebugger.gui
 ```
 
+![GUI 截图](docs/screenshot.png)
+
 图形界面复刻原版交互：顶部「开始测试 / 导出结果」，下面是一列可展开的检查卡片，
-图标按状态着色（灰=未检查、蓝=进行中、绿=通过、黄=警告、红=失败、灰=跳过）。
+图标按状态着色（灰=未检查、蓝=进行中、绿=通过、黄=警告、红=失败、灰=跳过），
+失败与警告项会自动展开。检查在独立 `QThread` 里运行，界面不会卡死；
+关闭窗口会协作式取消未开始的检查并等待线程退出。
+
+无显示环境（CI / 远程）下可以用离屏渲染验证界面：
+
+```bash
+uv run python scripts/gui_render_sample.py out.png      # 用固定样本渲染
+uv run python scripts/gui_smoke.py out.png              # 真跑一轮检查再截图
+```
 
 ## 项目结构
 

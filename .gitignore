@@ -233,5 +233,9 @@ reports/
 /ResultExport.md
 /result.json
 
+# 临时渲染/截图产物（docs/screenshot.png 是正式资源，不受影响）
+/gui_*.png
+/gui_*.json
+
 # Local virtualenvs other than .venv
 .venv*/

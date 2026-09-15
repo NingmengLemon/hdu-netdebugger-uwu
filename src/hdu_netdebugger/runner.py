@@ -97,6 +97,7 @@ async def run_checks(
     ping_backend: Backend | None = None,
     session: RunSession | None = None,
     on_progress: Callable[[ProgressEvent], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> RunResult:
     """执行检查项并汇总结论。
 
@@ -108,6 +109,8 @@ async def run_checks(
         ping_backend: 强制指定的 Ping 后端。
         session: 复用的 session（测试或多次运行共享状态时使用）。
         on_progress: 每完成一个检查项就回调一次。
+        should_stop: 协作式取消 —— 每个检查项开始前询问一次；
+            返回 ``True`` 时停止调度后续检查项（已完成的结论仍然保留）。
 
     Returns:
         包含全部检查项结论的 :class:`RunResult`。
@@ -126,6 +129,8 @@ async def run_checks(
 
     try:
         for index, spec in enumerate(specs):
+            if should_stop is not None and should_stop():
+                break
             outcome = await _run_one(spec, active)
             outcomes.append(outcome)
             if on_progress is not None:

@@ -120,8 +120,13 @@ ignore = [
 ]
 "src/hdu_netdebugger/gui/**" = [
     "ERA001",  # commented-out code kept as QSS/layout notes
+    "FBT003",  # Qt setter 只能按位置传布尔值 (setChecked(False) 等)
     "N802",    # Qt overrides use camelCase (paintEvent, sizeHint, ...)
     "N815",    # Qt mixedCase attributes
+]
+"scripts/**" = [
+    "INP001",  # 独立的运维脚本，不是包的一部分
+    "T201",    # 脚本用 print 输出结果
 ]
 
 [tool.ruff.lint.isort]
