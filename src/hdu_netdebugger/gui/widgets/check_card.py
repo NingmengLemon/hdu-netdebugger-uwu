@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from hdu_netdebugger.gui.style import status_color, status_icon
 from hdu_netdebugger.models.enums import CheckStatus
+from hdu_netdebugger.theme import SUGGESTION_MARK, WARNING_MARK
 
 if TYPE_CHECKING:
     from PySide6.QtGui import QMouseEvent
@@ -125,9 +126,11 @@ class CheckCard(QFrame):
         layout.setSpacing(8)
 
         self._suggestion_box, self._suggestion_body = self._build_box(
-            body, "InfoBox", "建议：", "💡"
+            body, "InfoBox", "建议：", SUGGESTION_MARK
         )
-        self._warning_box, self._warning_body = self._build_box(body, "WarnBox", "警告：", "⚠")
+        self._warning_box, self._warning_body = self._build_box(
+            body, "WarnBox", "警告：", WARNING_MARK
+        )
         layout.addWidget(self._suggestion_box)
         layout.addWidget(self._warning_box)
 

@@ -19,7 +19,13 @@ from hdu_netdebugger.report import (
     exit_code_for,
     summarize,
 )
-from hdu_netdebugger.theme import CHECK_STATUS_STYLES, UNICODE_ICONS, icon_for
+from hdu_netdebugger.theme import (
+    CHECK_STATUS_STYLES,
+    SUGGESTION_MARK,
+    UNICODE_ICONS,
+    WARNING_MARK,
+    icon_for,
+)
 
 CHECKED_AT = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
 GENERATED_AT = datetime(2025, 1, 1, 12, 0, 5, tzinfo=UTC)
@@ -205,3 +211,19 @@ class TestTheme:
         assert icon_for(CheckStatus.PASSED) == "✔"
         assert icon_for(CheckStatus.FAILED) == "✖"
         assert icon_for(CheckStatus.WARNED) == "⚠"
+
+    @pytest.mark.parametrize(
+        "glyph",
+        [*UNICODE_ICONS.values(), SUGGESTION_MARK, WARNING_MARK],
+    )
+    def test_ui_chrome_glyphs_stay_in_bmp(self, glyph: str) -> None:
+        """界面固定符号必须落在基本多文种平面内。
+
+        回归：曾经用 ``💡``（U+1F4A1）。Windows 有 emoji 字体回退所以正常，
+        Debian 默认的 WQY 字体没有该字形，卡片上直接渲染成豆腐块。
+        补充平面字符只能出现在 Markdown 报告里（由浏览器/编辑器渲染）。
+        """
+        assert all(ord(char) <= 0xFFFF for char in glyph), f"{glyph!r} 超出 BMP"
+
+    def test_marks_are_distinct(self) -> None:
+        assert SUGGESTION_MARK != WARNING_MARK

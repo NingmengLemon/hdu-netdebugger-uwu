@@ -15,7 +15,7 @@ from rich.text import Text
 
 from hdu_netdebugger import __version__
 from hdu_netdebugger.report import summarize
-from hdu_netdebugger.theme import CHECK_STATUS_STYLES, icon_for
+from hdu_netdebugger.theme import CHECK_STATUS_STYLES, SUGGESTION_MARK, WARNING_MARK, icon_for
 
 if TYPE_CHECKING:
     from rich.console import RenderableType
@@ -128,10 +128,10 @@ class ConsoleReporter:
     def _actionable_text(outcome: CheckOutcome) -> Text:
         text = Text()
         for warning in outcome.warnings:
-            text.append("⚠ ", style="yellow")
+            text.append(f"{WARNING_MARK} ", style="yellow")
             text.append(f"{warning}\n")
         for suggestion in outcome.suggestions:
-            text.append("💡 ", style="cyan")
+            text.append(f"{SUGGESTION_MARK} ", style="cyan")
             text.append(f"{suggestion}\n")
         text.rstrip()
         return text
@@ -202,9 +202,15 @@ def render_check_outcome(outcome: CheckOutcome) -> RenderableType:
         )
     ]
     if outcome.warnings:
-        blocks.append(Text("\n".join(f"⚠ {item}" for item in outcome.warnings), style="yellow"))
+        blocks.append(
+            Text("\n".join(f"{WARNING_MARK} {item}" for item in outcome.warnings), style="yellow")
+        )
     if outcome.suggestions:
-        blocks.append(Text("\n".join(f"💡 {item}" for item in outcome.suggestions), style="cyan"))
+        blocks.append(
+            Text(
+                "\n".join(f"{SUGGESTION_MARK} {item}" for item in outcome.suggestions), style="cyan"
+            )
+        )
     if outcome.details:
         blocks.append(Text(outcome.details, style="dim"))
     return Group(*blocks)

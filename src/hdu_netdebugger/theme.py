@@ -14,9 +14,20 @@ __all__ = [
     "CHECK_STATUS_COLORS",
     "CHECK_STATUS_EMOJI",
     "CHECK_STATUS_STYLES",
+    "SUGGESTION_MARK",
     "UNICODE_ICONS",
+    "WARNING_MARK",
     "icon_for",
 ]
+
+#: 「建议」与「警告」的小标记（GUI 卡片标题、CLI 待处理事项表格共用）。
+#:
+#: 刻意只用**基本多文种平面**（BMP，U+0000–U+FFFF）里的符号：
+#: 曾经用过 ``💡``（U+1F4A1），Windows 有 Segoe UI Emoji 回退所以看着正常，
+#: 但 Debian 默认的 WQY 字体没有它的字形，界面上直接渲染成一个豆腐块。
+#: 想换符号前先跑 ``scripts/check_glyphs.py`` 在目标平台上确认有字形。
+SUGGESTION_MARK = "※"  # U+203B，中文排版里通用的"注/提示"标记
+WARNING_MARK = "⚠"  # U+26A0
 
 #: 终端 / GUI 使用的符号（宽字符集，绝大多数终端字体都能显示）
 UNICODE_ICONS: MappingProxyType[CheckStatus, str] = MappingProxyType(
