@@ -95,6 +95,7 @@ ignore = [
     "PLR0912", # too many branches
     "PLR0913", # too many arguments in function definition
     "PLR0915", # too many statements
+    "PLR0917", # too many positional arguments (CLI 命令参数天然很多)
     "PLR2004", # magic value used in comparison
     "RUF001",  # ambiguous unicode character in string (Chinese full-width punctuation)
     "RUF002",  # ambiguous unicode character in docstring

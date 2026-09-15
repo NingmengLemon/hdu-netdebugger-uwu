@@ -229,6 +229,9 @@ __marimo__/
 # Generated diagnostic reports
 *.report.md
 reports/
+/report.md
+/ResultExport.md
+/result.json
 
 # Local virtualenvs other than .venv
 .venv*/
