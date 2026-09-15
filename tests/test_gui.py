@@ -38,6 +38,7 @@ from hdu_netdebugger.models.enums import CheckStatus
 from hdu_netdebugger.models.result import CheckOutcome
 from hdu_netdebugger.registry import all_checkers
 from hdu_netdebugger.runner import ProgressEvent, RunResult
+from scripts.gui_smoke import judge
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -416,3 +417,37 @@ class TestCloseBehaviour:
 
         assert closed == []
         assert window._run_button.isEnabled()
+
+
+class TestGuiSmokeJudge:
+    """``scripts/gui_smoke.py`` 的判定逻辑。
+
+    回归：它以前在运行级失败时照样返回 0（模态错误框把 is_running 翻成 False，
+    轮询就以为"跑完了"），CI 门禁因此会在坏版本上放行。
+    """
+
+    def _apply_all(self, window: MainWindow) -> None:
+        for card in window._cards:
+            card.apply(make_outcome(card.spec_name, CheckStatus.PASSED))
+
+    def test_all_cards_have_outcomes_passes(self, window: MainWindow) -> None:
+        self._apply_all(window)
+        assert judge(window._cards, saved=True, runtime_errors=[]) == []
+
+    def test_missing_outcomes_are_reported(self, window: MainWindow) -> None:
+        problems = judge(window._cards, saved=True, runtime_errors=[])
+        assert len(problems) == 1
+        assert "没有结果" in problems[0]
+        assert window._cards[0].spec_name in problems[0]
+
+    def test_failed_screenshot_is_reported(self, window: MainWindow) -> None:
+        self._apply_all(window)
+        assert judge(window._cards, saved=False, runtime_errors=[]) == ["截图写入失败"]
+
+    def test_runtime_error_is_reported(self, window: MainWindow) -> None:
+        self._apply_all(window)
+        problems = judge(window._cards, saved=True, runtime_errors=["RuntimeError: 炸了"])
+        assert problems == ["运行期错误: RuntimeError: 炸了"]
+
+    def test_empty_registry_is_reported(self) -> None:
+        assert judge([], saved=True, runtime_errors=[]) == ["没有注册任何检查项"]

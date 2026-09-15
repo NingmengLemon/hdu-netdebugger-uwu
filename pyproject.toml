@@ -132,7 +132,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["hdu_netdebugger"]
+known-first-party = ["hdu_netdebugger", "scripts"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "parents"
