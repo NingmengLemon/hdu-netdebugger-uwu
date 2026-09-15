@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -23,7 +23,7 @@ except ImportError as exc:  # pragma: no cover - 环境不完整时才会触发
         "若已安装却导入失败，多半是缺系统库（Linux 上的 libGL / libEGL / xkbcommon）"
     ) from exc
 
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtGui import QCloseEvent, QColor, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -43,7 +43,10 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
+    from PySide6.QtCore import QThread
+
     from hdu_netdebugger.gui.widgets.check_card import CheckCard
+    from hdu_netdebugger.gui.worker import CheckWorker
 
 CHECKED_AT = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
 
@@ -51,6 +54,23 @@ CHECKED_AT = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
 def noop_dialog(*_args: object, **_kwargs: object) -> None:
     """替代 QMessageBox 的弹窗，避免测试阻塞。"""
     return
+
+
+class _RunningThread:
+    """只实现 ``closeEvent`` 用到的那一个方法（模拟仍在运行的 QThread）。"""
+
+    def isRunning(self) -> bool:  # noqa: N802 - 模拟 Qt 接口
+        return True
+
+
+class _RecordingWorker:
+    """记录 ``cancel()`` 调用次数的假 worker。"""
+
+    def __init__(self) -> None:
+        self.cancel_calls = 0
+
+    def cancel(self) -> None:
+        self.cancel_calls += 1
 
 
 @pytest.fixture(scope="module")
@@ -333,3 +353,66 @@ class TestMainWindow:
         pixmap = window.grab()
         assert not pixmap.isNull()
         assert pixmap.width() > 0
+
+
+class TestCloseBehaviour:
+    """关窗必须是非阻塞的协作式取消。
+
+    回归：曾经 ``thread.quit(); thread.wait(15000); thread.terminate()`` ——
+    既卡住消息泵十几秒，又可能 hard-kill 正在跑 asyncio 的线程。
+    """
+
+    def _arm_running(self, window: MainWindow) -> _RecordingWorker:
+        """把窗口伪装成"正在跑检查"。"""
+        worker = _RecordingWorker()
+        window._worker = cast("CheckWorker", worker)
+        window._thread = cast("QThread", _RunningThread())
+        return worker
+
+    def test_close_without_run_is_accepted(self, window: MainWindow) -> None:
+        event = QCloseEvent()
+        window.closeEvent(event)
+        assert event.isAccepted()
+
+    def test_close_while_running_is_deferred(self, window: MainWindow) -> None:
+        worker = self._arm_running(window)
+
+        event = QCloseEvent()
+        window.closeEvent(event)
+
+        assert not event.isAccepted(), "线程还在跑时不能立刻放行关闭"
+        assert worker.cancel_calls == 1
+        assert window._closing is True
+        assert not window._run_button.isEnabled()
+
+    def test_repeated_close_does_not_re_cancel(self, window: MainWindow) -> None:
+        worker = self._arm_running(window)
+        window.closeEvent(QCloseEvent())
+        window.closeEvent(QCloseEvent())
+        assert worker.cancel_calls == 1
+
+    def test_thread_finished_closes_window_when_closing(
+        self,
+        window: MainWindow,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        window._closing = True
+        closed: list[bool] = []
+        monkeypatch.setattr(window, "close", lambda: closed.append(True))
+
+        window._on_thread_finished()
+
+        assert closed == [True]
+
+    def test_thread_finished_keeps_window_when_not_closing(
+        self,
+        window: MainWindow,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        closed: list[bool] = []
+        monkeypatch.setattr(window, "close", lambda: closed.append(True))
+
+        window._on_thread_finished()
+
+        assert closed == []
+        assert window._run_button.isEnabled()

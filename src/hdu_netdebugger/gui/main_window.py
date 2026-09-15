@@ -36,6 +36,8 @@ from hdu_netdebugger.report import build_json, build_markdown, summarize
 if TYPE_CHECKING:
     from datetime import datetime
 
+    from PySide6.QtGui import QCloseEvent
+
     from hdu_netdebugger.runner import ProgressEvent, RunResult
 
 __all__ = ["MainWindow"]
@@ -54,6 +56,8 @@ class MainWindow(QMainWindow):
         self._result: RunResult | None = None
         self._thread: QThread | None = None
         self._worker: CheckWorker | None = None
+        #: 已请求关闭、正在等后台线程收尾
+        self._closing = False
 
         central = QWidget(self)
         self.setCentralWidget(central)
@@ -185,7 +189,7 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "检查失败", f"检查过程中发生错误：\n\n{message}")
 
     def _on_thread_finished(self) -> None:
-        """线程退出后清理引用，允许再次运行。"""
+        """线程退出后清理引用，允许再次运行（若正在关窗则把窗口关掉）。"""
         if self._thread is not None:
             self._thread.deleteLater()
         if self._worker is not None:
@@ -193,6 +197,8 @@ class MainWindow(QMainWindow):
         self._thread = None
         self._worker = None
         self._run_button.setEnabled(True)
+        if self._closing:
+            self.close()
 
     @property
     def is_running(self) -> bool:
@@ -238,15 +244,26 @@ class MainWindow(QMainWindow):
 
     # -- 生命周期 ---------------------------------------------------------
 
-    def closeEvent(self, event: object) -> None:
-        """关闭窗口前先停掉后台线程，避免 Python 进程退不出去。"""
-        worker = self._worker
-        thread = self._thread
-        if worker is not None:
-            worker.cancel()
-        if thread is not None and thread.isRunning():
-            thread.quit()
-            if not thread.wait(15000):  # pragma: no cover - 极端慢网络
-                thread.terminate()
-                thread.wait(3000)
-        super().closeEvent(event)  # ty: ignore[invalid-argument-type]
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """关闭窗口前先协作式取消，等后台线程真的退出再关。
+
+        以前是 ``thread.wait(15000)`` 超时后 ``terminate()``：既会把消息泵饿死
+        十几秒（Windows 上直接显示"无响应"），又可能 hard-kill 一个正在跑
+        ``asyncio`` 的线程 —— 它持有 GIL，于是窗口没了进程还留着，正是这段代码
+        想避免的结果。现在不阻塞：请求取消 → 忽略这次关闭 →
+        线程真正结束后由 :meth:`_on_thread_finished` 再关一次。
+
+        等待是有界的：``run_checks`` 只会在检查项之间检查取消标志，而每个检查项
+        的网络调用都带超时（最坏约十几秒），所以不会无限等下去。
+        """
+        if self._thread is not None and self._thread.isRunning():
+            if not self._closing:
+                self._closing = True
+                if self._worker is not None:
+                    self._worker.cancel()
+                self.statusBar().showMessage("正在取消当前检查…")
+                self._run_button.setEnabled(False)
+                self._export_button.setEnabled(False)
+            event.ignore()
+            return
+        super().closeEvent(event)
