@@ -28,7 +28,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from hdu_netdebugger.checkers import load_builtin_checkers
 from hdu_netdebugger.gui.main_window import MainWindow
-from hdu_netdebugger.gui.style import apply_theme
+from hdu_netdebugger.gui.style import apply_theme, fonts_available
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -67,6 +67,14 @@ def main() -> int:
 
     app = QApplication.instance() or QApplication(["gui_smoke"])
     apply_theme(app)
+
+    if not fonts_available():
+        # 只告警不判失败：这个脚本验证的是"界面链路能不能跑通"，
+        # 缺字体不影响那个结论，截图里的文字才是不可信的。
+        print(
+            "警告: 当前 Qt 没有可用字体（offscreen 插件不接系统字体库），截图里的文字会是豆腐块。",
+            file=sys.stderr,
+        )
 
     # 运行级失败时主窗口会弹**模态**错误框：模态会开一个嵌套事件循环，
     # 而下面的轮询定时器照样会触发 —— 于是截图里带着一个错误对话框、

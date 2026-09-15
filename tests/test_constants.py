@@ -33,7 +33,7 @@ from hdu_netdebugger.constants import (
         ("10.249.0.1", NetworkKind.CAMPUS),
         ("10.249.255.254", NetworkKind.CAMPUS),
         ("10.149.255.255", None),
-        ("10.151.31.97", None),
+        ("10.151.0.1", None),
         ("192.0.2.20", None),
         ("192.168.1.1", None),
     ],

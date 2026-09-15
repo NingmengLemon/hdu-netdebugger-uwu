@@ -140,7 +140,6 @@ class MainWindow(QMainWindow):
         for card in self._cards:
             card.reset()
             card.mark_running()
-        self._cards[0].set_expanded(True)
 
         worker = CheckWorker(
             config=RunConfig(),

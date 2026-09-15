@@ -65,7 +65,7 @@ class TestGetInfoCheck:
                     description="Realtek",
                     kind=InterfaceKind.ETHERNET,
                     is_up=True,
-                    ipv4=("10.150.31.97",),
+                    ipv4=("10.150.0.100",),
                 )
             ],
         )
@@ -576,7 +576,7 @@ class TestAuthCheck:
         result = await run_check(AuthCheck, session)
         details = result.details or ""
         assert "在线设备(非空)数量: 1" in details
-        assert "设备IP: 10.150.184.118" in details
+        assert "设备IP: 10.150.0.100" in details
         assert "运营商: 电信" in details
 
     async def test_invalid_isp_id_records_none(
@@ -896,5 +896,5 @@ def test_context_reset_clears_everything() -> None:
 
 def test_json_dumps_of_details_is_stable() -> None:
     """详细日志里可能混入 JSON，确认不会因为编码问题炸掉。"""
-    payload = json.dumps({"在线设备": "10.150.184.118"}, ensure_ascii=False)
+    payload = json.dumps({"在线设备": "10.150.0.100"}, ensure_ascii=False)
     assert "在线设备" in payload

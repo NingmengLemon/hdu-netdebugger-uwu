@@ -57,7 +57,7 @@ class TestSrunAuthResponse:
         assert response.error == "ok"
         assert response.billing_name == "电信"
         assert response.domain == "mac-auth"
-        assert response.user_name == "2025001"
+        assert response.user_name == "200000000"
         assert response.products_id == "4"
         assert response.online_device_total == "1"
         assert response.is_ok
@@ -101,15 +101,15 @@ class TestSrunAuthResponse:
         response = SrunAuthResponse.from_payload(
             {"online_device_detail": json.dumps(srun_device_detail, ensure_ascii=False)}
         )
-        assert set(response.online_device_detail) == {"63568314", "0"}
-        device = response.online_device_detail["63568314"]
-        assert device.ip == "10.150.184.118"
+        assert set(response.online_device_detail) == {"1001", "0"}
+        device = response.online_device_detail["1001"]
+        assert device.ip == "10.150.0.100"
         assert device.os_name == "MAC auth"
 
     def test_online_device_detail_direct_object(self, srun_device_detail: JsonObject) -> None:
         """部分深澜版本直接给对象，也要能解析。"""
         response = SrunAuthResponse.from_payload({"online_device_detail": srun_device_detail})
-        assert response.online_device_detail["63568314"].rad_online_id == "63568314"
+        assert response.online_device_detail["1001"].rad_online_id == "1001"
 
     @pytest.mark.parametrize(
         "raw",
@@ -124,7 +124,7 @@ class TestSrunAuthResponse:
         response = SrunAuthResponse.from_payload(
             {"online_device_detail": json.dumps(srun_device_detail)}
         )
-        assert set(response.active_devices) == {"63568314"}
+        assert set(response.active_devices) == {"1001"}
 
     @pytest.mark.parametrize(
         ("products_id", "expected"),
@@ -160,8 +160,8 @@ class TestSrunAuthResponse:
         response = parse_auth_response(srun_ok_text)
         assert response is not None
         assert response.isp_id is SrunProductId.CHINA_TELECOM
-        assert list(response.active_devices) == ["63568314"]
-        assert response.real_name == "张三"
+        assert list(response.active_devices) == ["1001"]
+        assert response.real_name == "测试用户"
 
 
 class TestDeviceItem:

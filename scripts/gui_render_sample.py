@@ -20,7 +20,7 @@ from PySide6.QtWidgets import QApplication
 
 from hdu_netdebugger.checkers import load_builtin_checkers
 from hdu_netdebugger.gui.main_window import MainWindow
-from hdu_netdebugger.gui.style import apply_theme
+from hdu_netdebugger.gui.style import apply_theme, fonts_available
 from hdu_netdebugger.models.enums import CheckStatus
 from hdu_netdebugger.models.result import CheckOutcome
 
@@ -33,7 +33,7 @@ SAMPLES: list[CheckOutcome] = [
         details=(
             "接口名称: WLAN\n"
             "描述: Realtek 8852CE WiFi 6E PCI-E NIC\n"
-            "IPv4 地址: 10.151.31.97\n"
+            "IPv4 地址: 10.150.0.100\n"
             "IPv6 地址: 2409:8929:b57d:45a1:253e:7aa8:cca1:40b5\n"
             "\n"
             "检测到活动的 propVirtual 类型网络接口，可能为 VPN 或其他隧道接口，详情如下：\n"
@@ -124,6 +124,13 @@ def main() -> int:
 
     app = QApplication.instance() or QApplication(["gui_render_sample"])
     apply_theme(app)
+
+    if not fonts_available():
+        print(
+            "警告: 当前 Qt 没有可用字体（offscreen 插件不接系统字体库），"
+            "截图里的文字会是豆腐块 —— 只能用来核对布局与配色。",
+            file=sys.stderr,
+        )
 
     window = MainWindow()
     window.resize(1000, 1000)

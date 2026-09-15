@@ -201,8 +201,8 @@ def _ipaddr_network_order(address: str) -> int:
     """把点分十进制地址转成 ``IcmpSendEcho`` 要求的网络序 ``IPAddr``。
 
     ``IPAddr`` 是个 ``ULONG``，但它的**内存布局**必须是网络序字节 —— 也就是说小端机器上
-    192.0.2.1 对应的数值是 ``0x012810AC``。若直接用 ``int(IPv4Address(address))``
-    （把点分十进制当主机序整数解释）会得到字节反过来的 ``0xAC102801``，
+    192.0.2.1 对应的数值是 ``0x010200C0``。若直接用 ``int(IPv4Address(address))``
+    （把点分十进制当主机序整数解释）会得到字节反过来的 ``0xC0000201``，
     实际去 ping 的是另一个地址：可达目标会报超时，连回环地址都 ping 不到本机。
     """
     return int.from_bytes(IPv4Address(address).packed, "little")

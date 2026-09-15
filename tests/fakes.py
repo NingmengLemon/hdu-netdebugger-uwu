@@ -156,6 +156,11 @@ def srun_jsonp(payload: Mapping[str, Any], *, wrapper: str = "jQuery") -> str:
 
 
 #: 一份「认证正常」的响应体
+#:
+#: 注意：这里所有取值都是**编出来的**。样本最初来自一次真实抓包，但仓库文件里
+#: 不该留真实账号/内网地址/设备 ID 这类环境指纹，所以账号、姓名、MAC、
+#: rad_online_id 与 IP 全部换成了明显合成或保留值（``10.150.0.100`` 在生活区
+#: 网段内，形状和真实响应一致；MAC 用本地管理地址前缀 ``02:``）。
 SRUN_OK_PAYLOAD: dict[str, Any] = {
     "ServerFlag": 0,
     "add_time": 1700000000,
@@ -169,11 +174,11 @@ SRUN_OK_PAYLOAD: dict[str, Any] = {
     "group_id": "1",
     "keepalive_time": 0,
     "online_device_total": "1",
-    "online_ip": "10.150.184.118",
+    "online_ip": "10.150.0.100",
     "online_ip6": "::",
     "products_id": "4",
     "products_name": "中国电信",
-    "real_name": "张三",
+    "real_name": "测试用户",
     "remain_bytes": 0,
     "remain_seconds": 0,
     "sum_bytes": 0,
@@ -181,19 +186,19 @@ SRUN_OK_PAYLOAD: dict[str, Any] = {
     "sysver": "1.0",
     "user_balance": 0,
     "user_charge": 0,
-    "user_mac": "aabbccddeeff",
-    "user_name": "2025001",
+    "user_mac": "020000000001",
+    "user_name": "200000000",
     "wallet_balance": 0,
 }
 
 #: 在线设备明细（含一台空 IP 的占位设备）
 SRUN_DEVICE_DETAIL: dict[str, Any] = {
-    "63568314": {
+    "1001": {
         "class_name": "1",
-        "ip": "10.150.184.118",
+        "ip": "10.150.0.100",
         "ip6": "::",
         "os_name": "MAC auth",
-        "rad_online_id": "63568314",
+        "rad_online_id": "1001",
     },
     "0": {"class_name": "", "ip": "", "ip6": "", "os_name": "", "rad_online_id": "0"},
 }

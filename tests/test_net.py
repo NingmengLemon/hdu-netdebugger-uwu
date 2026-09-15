@@ -464,7 +464,7 @@ class TestWindowsIcmpHelpers:
         ("address", "expected"),
         [
             ("127.0.0.1", 0x0100007F),
-            ("192.0.2.1", 0x012810AC),
+            ("192.0.2.1", 0x010200C0),
             ("10.150.0.1", 0x0100960A),
             ("223.5.5.5", 0x050505DF),
             ("0.0.0.0", 0x00000000),  # noqa: S104 - 只是地址编码测试向量, 不涉及绑定
@@ -476,7 +476,7 @@ class TestWindowsIcmpHelpers:
         assert ping_module._ipaddr_network_order(address) == expected
 
     def test_ipaddr_differs_from_host_order_int(self) -> None:
-        """回归：旧实现用 ``int(IPv4Address(...))``，会把 192.0.2.1 实际打成 1.40.16.172。"""
+        """回归：旧实现用 ``int(IPv4Address(...))``，会把 192.0.2.1 实际打成 1.2.0.192。"""
         assert ping_module._ipaddr_network_order("192.0.2.1") != int(IPv4Address("192.0.2.1"))
 
     def test_ipv6_is_rejected_by_ipaddr_helper(self) -> None:
@@ -898,7 +898,7 @@ class TestInterfaceInfo:
             description="Realtek",
             kind=InterfaceKind.ETHERNET,
             is_up=True,
-            ipv4=("10.150.31.97", "169.254.1.1"),
+            ipv4=("10.150.0.100", "169.254.1.1"),
         )
         assert info.network is not None
         assert info.network.value == "Dorm"

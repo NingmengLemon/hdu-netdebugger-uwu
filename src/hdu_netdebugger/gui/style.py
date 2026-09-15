@@ -35,6 +35,7 @@ __all__ = [
     "TEXT_MUTED",
     "WINDOW_BG",
     "apply_theme",
+    "fonts_available",
     "repolish",
     "status_color",
     "status_icon",
@@ -59,6 +60,19 @@ def status_color(status: CheckStatus) -> str:
 def status_icon(status: CheckStatus) -> str:
     """取状态对应的符号。"""
     return UNICODE_ICONS[status]
+
+
+def fonts_available() -> bool:
+    """当前 Qt 是否有可用字体。
+
+    ``offscreen`` 平台插件不接系统字体库，而 PySide6 6.11 起又不再随附字体
+    （``QFontDatabase: Cannot find font directory .../PySide6/lib/fonts``）——
+    这时截图里的每个字都是豆腐块。那种截图只能核对布局与配色，不能核对文字，
+    所以两个截图脚本会据此给出显式告警。
+    """
+    from PySide6.QtGui import QFontDatabase  # noqa: PLC0415 - 只在需要时导入 Qt
+
+    return bool(QFontDatabase.families())
 
 
 APP_QSS = f"""

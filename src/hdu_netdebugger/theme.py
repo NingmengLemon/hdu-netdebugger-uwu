@@ -85,7 +85,9 @@ CHECK_STATUS_COLORS: MappingProxyType[CheckStatus, str] = MappingProxyType(
         CheckStatus.PASSED: "#4caf50",
         CheckStatus.WARNED: "#f9a825",
         CheckStatus.FAILED: "#e53935",
-        CheckStatus.SKIPPED: "#757575",
+        # 原版 StatusToIconColorConverter 给 Skipped 用的是 Orange：
+        # 跳过要能和"未检查"的灰区分开
+        CheckStatus.SKIPPED: "#ef6c00",
     }
 )
 
