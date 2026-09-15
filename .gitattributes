@@ -1,0 +1,23 @@
+# 统一换行符：仓库内一律 LF，Windows 检出时也保持 LF
+# （Makefile / shell 脚本 / Python 源码在 CRLF 下都有坑）
+* text=auto eol=lf
+
+# 二进制文件不做换行符转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.icns binary
+*.exe binary
+*.dll binary
+*.pyd binary
+*.so binary
+*.zip binary
+
+# uv.lock 是自动生成的，diff 噪音大且不参与代码评审
+uv.lock linguist-generated=true -diff
