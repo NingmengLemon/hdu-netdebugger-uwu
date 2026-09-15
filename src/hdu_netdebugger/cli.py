@@ -482,10 +482,34 @@ def version() -> None:
     typer.echo(f"Python {platform.python_version()} on {platform.system()}")
 
 
+def _make_stdio_robust() -> None:
+    """把 stdout / stderr 固定成 UTF-8 + ``errors="replace"``。
+
+    只对**管道与重定向**有意义：Windows 的 locale 编码是 cp936，而界面符号
+    ``✔ ✖ ⚠ ⊘`` 不在 cp936 里，直接 print 会抛 ``UnicodeEncodeError``。
+    开发时看不出来，是因为终端里通常有 ``PYTHONUTF8=1`` / ``PYTHONIOENCODING``
+    把它掩盖了，而**冻结成 exe 之后 PyInstaller 6.x 会忽略这两个环境变量**
+    （实测：重定向时输出变回 cp936）。所以：
+
+    * 编码显式定成 UTF-8 —— 与 ``-o report.md`` 写文件的编码一致，
+      ``hnd run --json | jq`` 之类才不会拿到非法 UTF-8；
+    * 错误策略放宽成 replace —— 万一还有编不出来的字符，退化成 ``?`` 而不是崩。
+
+    真实控制台不受影响：Python 在 Windows 控制台上走 WriteConsoleW，
+    本来就以 UTF-8 直写，重复设置一次没有副作用。窗口化构建里 ``sys.stdout``
+    是 ``None``，一并跳过。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> None:
     """``hnd`` / ``hdu-netdebugger`` 的入口点。"""
     from hdu_netdebugger.checkers import load_builtin_checkers  # noqa: PLC0415
 
+    _make_stdio_robust()
     load_builtin_checkers()
     app()
 

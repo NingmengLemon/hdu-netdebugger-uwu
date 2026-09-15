@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 
 import pytest
 from typer.testing import CliRunner
@@ -386,3 +387,33 @@ class TestGuiCommand:
         result = runner.invoke(app, ["gui", "--help"])
         assert result.exit_code == 0
         assert "PySide6" in result.stdout
+
+
+class TestStdioRobustness:
+    """``_make_stdio_robust()``：冻结后 PYTHONUTF8 不再生效，界面符号必须不会炸。
+
+    Windows 重定向/管道走 locale 编码（cp936），``✔ ✖ ⚠ ⊘`` 不在其中，
+    直接 print 会抛 UnicodeEncodeError。
+    """
+
+    def test_reconfigures_both_streams_to_utf8_with_replace(self, monkeypatch) -> None:
+        calls: list[dict[str, object]] = []
+
+        class _Stream:
+            def reconfigure(self, **kwargs: object) -> None:
+                calls.append(kwargs)
+
+        monkeypatch.setattr(sys, "stdout", _Stream())
+        monkeypatch.setattr(sys, "stderr", _Stream())
+
+        cli_module._make_stdio_robust()
+
+        expected = {"encoding": "utf-8", "errors": "replace"}
+        assert calls == [expected, expected]
+
+    def test_streams_without_reconfigure_are_skipped(self, monkeypatch) -> None:
+        """窗口化构建里 stdout 是 None，重定向时也可能不是 TextIOWrapper。"""
+        monkeypatch.setattr(sys, "stdout", None)
+        monkeypatch.setattr(sys, "stderr", object())
+
+        cli_module._make_stdio_robust()  # 不该抛
