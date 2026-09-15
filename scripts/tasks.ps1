@@ -24,6 +24,11 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# 纯 cmdlet 的分支（help / clean）不会设置 $LASTEXITCODE，而 StrictMode 下读取
+# 未赋值的变量会直接抛错 —— 曾经 `pwsh -File scripts/tasks.ps1 help`（也是默认任务）
+# 在打印完帮助后以退出码 1 失败。先给个 0，后面的原生命令会按需覆盖它。
+$LASTEXITCODE = 0
+
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $RepoRoot
 try {
