@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help dev sync lint fmt type test test-fast cov build clean run gui
+.PHONY: help dev sync lint fmt type test test-fast cov build exe exe-smoke clean run gui
 
 UV ?= uv
 PY ?= $(UV) run python
@@ -32,8 +32,14 @@ test: ## 运行测试（含覆盖率门槛）
 test-fast: ## 运行测试，跳过覆盖率统计
 	$(UV) run pytest --no-cov -q
 
-build: ## 构建 sdist + wheel
+build: ## 构建 sdist + wheel（Python 包）
 	$(UV) build
+
+exe: ## 打包成可执行文件（CLI + GUI，产物在 dist/）
+	$(UV) run --group build pyinstaller --clean --noconfirm packaging/hnd.spec
+
+exe-smoke: exe ## 打包后跑一遍冻结产物（CLI 自检 + 离屏 GUI 冒烟）
+	$(PY) scripts/dist_smoke.py
 
 run: ## 运行一次完整检查
 	$(UV) run hnd run -v

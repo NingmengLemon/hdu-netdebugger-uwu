@@ -17,7 +17,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('help', 'dev', 'sync', 'lint', 'fmt', 'type', 'test', 'test-fast', 'build', 'run', 'gui', 'clean')]
+    [ValidateSet('help', 'dev', 'sync', 'lint', 'fmt', 'type', 'test', 'test-fast', 'build', 'exe', 'exe-smoke', 'run', 'gui', 'clean')]
     [string]$Task = 'help'
 )
 
@@ -43,7 +43,9 @@ try {
                 @('type', '仅类型检查'),
                 @('test', '运行测试（含覆盖率门槛 80%）'),
                 @('test-fast', '运行测试，跳过覆盖率统计'),
-                @('build', '构建 sdist + wheel'),
+                @('build', '构建 sdist + wheel（Python 包）'),
+                @('exe', '打包成可执行文件（CLI + GUI，产物在 dist/）'),
+                @('exe-smoke', '打包后跑一遍冻结产物（CLI 自检 + 离屏 GUI 冒烟）'),
                 @('run', '运行一次完整检查'),
                 @('gui', '启动图形界面'),
                 @('clean', '清理构建产物与缓存')
@@ -66,6 +68,12 @@ try {
         'test' { uv run pytest }
         'test-fast' { uv run pytest --no-cov -q }
         'build' { uv build }
+        'exe' { uv run --group build pyinstaller --clean --noconfirm packaging/hnd.spec }
+        'exe-smoke' {
+            uv run --group build pyinstaller --clean --noconfirm packaging/hnd.spec
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            uv run python scripts/dist_smoke.py
+        }
         'run' { uv run hnd run -v }
         'gui' { uv run hnd gui }
         'clean' {

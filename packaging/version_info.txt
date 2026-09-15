@@ -1,0 +1,43 @@
+# UTF-8
+#
+# Windows 可执行文件的版本资源（PE VERSIONINFO）。
+# PyInstaller 通过 spec 里的 version= 参数把它嵌进 exe。
+#
+# 这份文件是 `pyi-grab_version` 从系统 exe 取模板后改写的。
+# 注意：里面的版本号必须与 pyproject.toml 的 version 保持一致 ——
+# tests/test_packaging.py 会比对，避免"包里是 0.1.0、属性里是 0.2.0"。
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    # filevers 与 prodvers 必须是四项元组，用不到的位写 0
+    filevers=(0, 1, 0, 0),
+    prodvers=(0, 1, 0, 0),
+    # 有效位掩码
+    mask=0x3f,
+    # 文件属性的位掩码
+    flags=0x0,
+    # 目标操作系统：0x40004 = NT
+    OS=0x40004,
+    # 文件类型：0x1 = 应用程序
+    fileType=0x1,
+    # 该 fileType 下的用途：0x0 = 未定义
+    subtype=0x0,
+    # 创建时间戳（不填）
+    date=(0, 0)
+    ),
+  kids=[
+    StringFileInfo(
+      [
+      StringTable(
+        '040904B0',
+        [StringStruct('CompanyName', 'HDU NetDebugger (Uwu) contributors'),
+        StringStruct('FileDescription', 'HDU NetDebugger - 杭州电子科技大学校园网诊断工具'),
+        StringStruct('FileVersion', '0.1.0'),
+        StringStruct('InternalName', 'hnd'),
+        StringStruct('LegalCopyright', 'MIT License'),
+        StringStruct('OriginalFilename', 'hnd.exe'),
+        StringStruct('ProductName', 'HDU Net Debugger'),
+        StringStruct('ProductVersion', '0.1.0')])
+      ]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)

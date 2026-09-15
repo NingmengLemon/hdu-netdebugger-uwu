@@ -123,5 +123,62 @@ jobs:
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: dist
+          name: wheel
           path: dist/
+
+  exe:
+    name: exe (可执行文件) ${{ matrix.os }}
+    needs: [lint, test]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            experimental: false
+          - os: ubuntu-latest
+            experimental: false
+          # macOS 可以构建（PyInstaller 不跨平台编译，只能在目标平台上打），
+          # 而且下面的冒烟会真的跑一遍冻结产物（含 ping 的 darwin 参数路径）；
+          # 维护者手上没有 Mac，所以标成实验性：失败不阻塞发布，但产物照样上传。
+          - os: macos-latest
+            experimental: true
+    continue-on-error: ${{ matrix.experimental }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # 冻结的 GUI 冒烟要真的加载 Qt 平台插件；Linux runner 必须先装齐系统库
+      - name: 安装 Linux 下 Qt 所需的系统库
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            libgl1 libegl1 libxkbcommon0 libdbus-1-3 libfontconfig1 libglib2.0-0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 \
+            libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0 libxrender1 libxi6 \
+            fonts-wqy-zenhei
+
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: 安装依赖（含 build 组与 GUI extra）
+        run: uv sync --all-groups --extra gui
+
+      - name: 打包（必须在项目根目录执行，理由见 spec 注释）
+        run: uv run --group build pyinstaller --clean --noconfirm packaging/hnd.spec
+
+      - name: 冻结产物冒烟（CLI 版本/list/doctor + 离屏 GUI 截图）
+        run: uv run python scripts/dist_smoke.py
+
+      - name: 上传可执行文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: hnd-exe-${{ runner.os }}
+          path: |
+            dist/hnd
+            dist/HDU-NetDebugger
+          if-no-files-found: error

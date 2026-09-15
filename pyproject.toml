@@ -49,6 +49,12 @@ module-name = "hdu_netdebugger"
 module-root = "src"
 
 [dependency-groups]
+# 打包成可执行文件用的工具链。刻意不放进 dev：普通贡献者不需要拉 PyInstaller。
+# 构建与 CI 用 `uv run --group build pyinstaller ...` / `uv sync --all-groups`。
+build = [
+    "pyinstaller>=6.22.3",
+    "pyinstaller-hooks-contrib>=2026.0",
+]
 dev = [
     { include-group = "lint" },
     { include-group = "test" },
@@ -129,6 +135,9 @@ ignore = [
 "scripts/**" = [
     "INP001",  # 独立的运维脚本，不是包的一部分
     "T201",    # 脚本用 print 输出结果
+]
+"packaging/**" = [
+    "INP001",  # PyInstaller 入口脚本，不是包的一部分
 ]
 
 [tool.ruff.lint.isort]

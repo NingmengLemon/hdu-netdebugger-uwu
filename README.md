@@ -125,7 +125,56 @@ uv run python scripts/gui_smoke.py out.png              # 真跑一轮检查再�
 > 因此在没有额外装字体的机器上截出来的文字全是豆腐块（脚本会给出显式告警）：
 > 那种截图只能核对布局与配色，别用它核对文字。Linux CI 会先装 `fonts-wqy-zenhei`。
 
+## 打包成可执行文件
+
+给不想装 Python 的同学用：CLI 与 GUI 各打成一个**目录式**（onedir）产物。
+
+```bash
+uv run --group build pyinstaller --clean --noconfirm packaging/hnd.spec
+# 或
+make exe                                      # Windows： pwsh -File scripts/tasks.ps1 exe
+```
+
+| 产物 | 子系统 | 说明 |
+|------|--------|------|
+| `dist/hnd/hnd` | 控制台 | CLI；排除了 PySide6，约 30 MB |
+| `dist/HDU-NetDebugger/HDU-NetDebugger` | 窗口 | GUI，带 Qt，约 120 MB |
+| `dist/hnd-gui-smoke/hnd-gui-smoke` | 控制台 | 只给 CI 用：冻结 `scripts/gui_smoke.py`，证明打进包里的 Qt 能用 |
+
+打完**必须**跑一遍产物自检（CI 的 `exe` 作业就是「打包 + 自检」这两步）：
+
+```bash
+uv run python scripts/dist_smoke.py     # CLI --version/list/doctor + 离屏跑 GUI 并截图
+```
+
+选型与取舍：
+
+- **onedir 而非 onefile**：onefile 每次启动都要解压到临时目录（几秒），还会踩到杀软
+  "自解压 + 执行"的启发式；本工具会被反复调用，不该付这个税。
+- **不用 UPX**：体积省不到 5 MB，却会弄坏 Qt 插件与开了 CFG 的 DLL。
+- **选 PyInstaller 而不是 Nuitka**：Nuitka 官方文档把 Windows 杀软误报的解法放在**付费**的
+  Commercial 计划里且"不保证有效"；本项目是免费校园工具，PyInstaller 那条缓解路线
+  （onedir / 不用 UPX / 写版本资源 / 需要时再签名）全部公开且免费。Nuitka 编译期还长得多。
+- **不跨平台编译**：PyInstaller 只能在目标平台上构建，所以 CI 用
+  windows / ubuntu 矩阵出产物（macOS 标为实验性：能构建、也跑同一套冒烟，但维护者没有机器验证）。
+- 冻结后 `PYTHONUTF8` / `PYTHONIOENCODING` 会失效，因此 CLI 入口显式把
+  stdout / stderr 固定成 UTF-8 + `errors="replace"`（`cli._make_stdio_robust`）：
+  重定向出来的 Markdown 与 `--json` 都是合法 UTF-8，界面符号即使编码不支持也只退化成一个 `?`。
+
+> 未签名的 Windows 产物首次运行可能被 SmartScreen 拦一下（"更多信息 → 仍要运行"）。
+> 真要对外发布，建议加代码签名证书，参见 skill `pyside6-desktop` 的 signing / AV 参考。
+
 ## 项目结构
+
+```text
+.
+├── src/hdu_netdebugger/   # 包源码（见下）
+├── tests/                 # pytest 用例（470+）
+├── scripts/               # 运维脚本：tasks.ps1 / gui_smoke.py / gui_render_sample.py
+│                          #           dist_smoke.py（冻结产物自检）/ check_glyphs.py
+├── packaging/             # PyInstaller 入口脚本 + hnd.spec + Windows 版本资源
+└── .github/workflows/     # CI（lint / test / build wheel / exe）
+```
 
 ```text
 src/hdu_netdebugger/
@@ -153,7 +202,9 @@ make lint     # ruff format --check + ruff check + ty check
 make fmt      # ruff check --fix + ruff format
 make test     # pytest（含覆盖率门槛 80%）
 make test-fast # pytest --no-cov
-make build    # uv build
+make build    # uv build（sdist + wheel）
+make exe      # PyInstaller 打包可执行文件（见上一节）
+make exe-smoke # 打包 + 冻结产物自检
 ```
 
 Windows 上没装 `make` 时，`scripts/tasks.ps1` 提供完全等价的任务：
@@ -162,6 +213,7 @@ Windows 上没装 `make` 时，`scripts/tasks.ps1` 提供完全等价的任务�
 pwsh -File scripts/tasks.ps1 lint
 pwsh -File scripts/tasks.ps1 test
 pwsh -File scripts/tasks.ps1 fmt
+pwsh -File scripts/tasks.ps1 exe-smoke
 ```
 
 直接调用底层命令也可以：
@@ -192,6 +244,7 @@ CI（`.github/workflows/ci.yml`）在 push / PR 时跑：
 - Ubuntu / Windows / macOS × Python 3.12 / 3.13 的完整测试矩阵
   （Linux 会先装齐 Qt 所需的系统库；GUI 测试模块在缺依赖时直接报错，不会静默跳过）
 - `uv build` 后把 wheel 装进干净虚拟环境，验证 `hnd --version` / `hnd list` 可用
+- 打包可执行文件并在三个平台上跑冻结产物自检（`scripts/dist_smoke.py`）
 
 ### 跨平台说明
 
