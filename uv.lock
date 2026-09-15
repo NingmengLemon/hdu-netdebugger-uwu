@@ -179,6 +179,7 @@ gui = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "pyside6" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
@@ -190,6 +191,7 @@ lint = [
     { name = "ty" },
 ]
 test = [
+    { name = "pyside6" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
@@ -209,6 +211,7 @@ provides-extras = ["gui"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "pyside6", specifier = ">=6.11.2" },
     { name = "pytest", specifier = ">=8.4.0" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
@@ -220,6 +223,7 @@ lint = [
     { name = "ty", specifier = ">=0.0.81" },
 ]
 test = [
+    { name = "pyside6", specifier = ">=6.11.2" },
     { name = "pytest", specifier = ">=8.4.0" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "pytest-cov", specifier = ">=7.1.0" },

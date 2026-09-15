@@ -1,7 +1,7 @@
 """图形界面（离屏运行）。
 
 Qt 的 ``offscreen`` 平台插件让窗口能在没有显示器的环境里构造与渲染，
-因此这些用例在 CI 里也能跑。没有装 PySide6 时整个模块会被跳过。
+因此这些用例在 CI 里也能跑。缺 PySide6 时在收集期直接报错（不静默跳过）。
 """
 
 from __future__ import annotations
@@ -15,7 +15,13 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("PySide6", reason="需要 gui extra： uv sync --extra gui")
+try:
+    import PySide6  # noqa: F401 - 只为探测依赖是否就绪
+except ImportError as exc:  # pragma: no cover - 环境不完整时才会触发
+    raise RuntimeError(
+        "GUI 测试需要 PySide6；请执行 uv sync（test 依赖组已包含它）或 uv sync --extra gui。"
+        "若已安装却导入失败，多半是缺系统库（Linux 上的 libGL / libEGL / xkbcommon）"
+    ) from exc
 
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (

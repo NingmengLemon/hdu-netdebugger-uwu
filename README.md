@@ -46,15 +46,19 @@ $ hnd
 ```bash
 git clone <repo> && cd Hdu_netDebugger_Uwu
 
-# 仅 CLI
-uv sync
+# 只要 CLI 运行环境：不装 dev 工具链，也不装 PySide6
+uv sync --no-default-groups
 
-# 带 GUI
+# 想直接用 GUI
 uv sync --extra gui
 
-# 开发（含 lint / test 工具链）
-uv sync --all-groups --extra gui
+# 开发：lint / 类型检查 / 完整测试套件
+uv sync --all-groups
 ```
+
+> `test` 依赖组里包含 PySide6 —— 完整测试套件要跑离屏 GUI 用例，缺了它覆盖率门槛
+> 会以"门槛不达标"的假象失败，所以让它跟着 `uv sync` 一起装上；只要 CLI 运行环境时
+> 用上面的 `--no-default-groups`。
 
 ## 使用
 

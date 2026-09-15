@@ -32,7 +32,7 @@ try {
             Write-Host '可用任务：' -ForegroundColor Cyan
             @(
                 @('dev', '安装全部依赖（含 lint/test 工具链与 GUI extra）'),
-                @('sync', '按 uv.lock 安装运行时依赖'),
+                @('sync', '按 uv.lock 同步依赖（uv 默认连 dev 组一起装）'),
                 @('lint', '只检查不修改：ruff format --check + ruff check + ty check'),
                 @('fmt', '自动修复格式与可修复的 lint 问题'),
                 @('type', '仅类型检查'),

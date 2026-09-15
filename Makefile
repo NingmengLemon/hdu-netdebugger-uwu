@@ -11,7 +11,7 @@ help: ## 显示本帮助
 dev: ## 安装全部依赖（含 lint/test 工具链与 GUI 额外项）
 	$(UV) sync --all-groups --extra gui
 
-sync: ## 按 uv.lock 安装运行时依赖
+sync: ## 按 uv.lock 同步依赖（uv 默认连 dev 组一起装）
 	$(UV) sync
 
 lint: ## 只检查、不修改：格式 + lint + 类型

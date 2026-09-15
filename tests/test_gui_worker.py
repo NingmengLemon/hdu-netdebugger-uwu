@@ -1,6 +1,7 @@
 """后台线程与 Qt 入口。
 
 线程是 GUI 最容易出错的部分，这里既验证信号内容，也真起一个 ``QThread`` 走完整链路。
+缺 PySide6 时在收集期直接报错（不静默跳过）。
 """
 
 from __future__ import annotations
@@ -14,7 +15,13 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("PySide6", reason="需要 gui extra： uv sync --extra gui")
+try:
+    import PySide6  # noqa: F401 - 只为探测依赖是否就绪
+except ImportError as exc:  # pragma: no cover - 环境不完整时才会触发
+    raise RuntimeError(
+        "GUI 测试需要 PySide6；请执行 uv sync（test 依赖组已包含它）或 uv sync --extra gui。"
+        "若已安装却导入失败，多半是缺系统库（Linux 上的 libGL / libEGL / xkbcommon）"
+    ) from exc
 
 from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QApplication, QMainWindow

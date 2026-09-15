@@ -58,6 +58,7 @@ lint = [
     "ty>=0.0.81",
 ]
 test = [
+    "pyside6>=6.11.2",  # 完整测试套件要跑 GUI 用例，缺了它覆盖率门槛会以假象失败
     "pytest>=8.4.0",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
