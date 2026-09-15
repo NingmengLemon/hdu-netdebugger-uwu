@@ -1,0 +1,37 @@
+[project]
+name = "hdu-netdebugger-uwu"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "NingmengLemon", email = "60469383+NingmengLemon@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "dnspython>=2.8.0",
+    "httpx>=0.28.1",
+    "psutil>=7.2.2",
+    "rich>=15.0.0",
+    "typer>=0.27.2",
+]
+
+[project.scripts]
+hdu-netdebugger-uwu = "hdu_netdebugger_uwu:main"
+
+[project.optional-dependencies]
+gui = [
+    "pyside6>=6.11.2",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.10,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.16.7",
+    "ty>=0.0.81",
+]
