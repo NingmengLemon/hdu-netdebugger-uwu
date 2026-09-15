@@ -140,6 +140,23 @@ make test-fast # pytest --no-cov
 make build    # uv build
 ```
 
+Windows 上没装 `make` 时，`scripts/tasks.ps1` 提供完全等价的任务：
+
+```powershell
+pwsh -File scripts/tasks.ps1 lint
+pwsh -File scripts/tasks.ps1 test
+pwsh -File scripts/tasks.ps1 fmt
+```
+
+直接调用底层命令也可以：
+
+```bash
+uv run ruff format --check .
+uv run ruff check .
+uv run ty check
+uv run pytest
+```
+
 质量工具链：
 
 - **[uv](https://docs.astral.sh/uv/)** — 依赖与虚拟环境管理
