@@ -34,7 +34,8 @@ VSVersionInfo(
         StringStruct('FileVersion', '0.1.0'),
         StringStruct('InternalName', 'hnd'),
         StringStruct('LegalCopyright', 'MIT License'),
-        StringStruct('OriginalFilename', 'hnd.exe'),
+        # 刻意不写 OriginalFilename: 同一份版本资源被 hnd / HDU-NetDebugger /
+        # hnd-gui-smoke 三个产物共用, 写死一个名字对另外两个就是错的.
         StringStruct('ProductName', 'HDU Net Debugger'),
         StringStruct('ProductVersion', '0.1.0')])
       ]),
