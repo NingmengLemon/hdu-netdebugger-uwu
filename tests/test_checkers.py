@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+import subprocess
+import sys
+from typing import TYPE_CHECKING, Any, Self
 
 import pytest
 
@@ -33,6 +35,7 @@ from hdu_netdebugger.context import CheckContext
 from hdu_netdebugger.models.enums import CheckResultStatus
 from hdu_netdebugger.models.interface import InterfaceInfo, InterfaceKind
 from hdu_netdebugger.net.dns import DnsResult
+from hdu_netdebugger.net.ping import Backend
 from tests.fakes import FakeHttp, FakePinger, make_session, srun_jsonp
 
 if TYPE_CHECKING:
@@ -224,11 +227,20 @@ class TestPingBasedChecks:
         assert result.status is CheckResultStatus.PASS
         assert result.summary == "BAS 可达"
 
-    async def test_bas_uses_configured_ping_count(self, session: RunSession) -> None:
+    async def test_bas_uses_configured_ping_count(
+        self,
+        session: RunSession,
+        pinger: FakePinger,
+    ) -> None:
         session.config.ping_count = 2
         result = await run_check(BASCheck, session)
         assert result.warnings
-        assert any("2" in line for line in (result.details or "").splitlines())
+        # 用替身记录下来的调用参数断言，而不是在日志里找 "2"（任何含 2 的行都会误判）
+        assert len(pinger.calls) == 1
+        target, options, backend = pinger.calls[0]
+        assert target == str(BAS_IP)
+        assert options.count == 2
+        assert backend is Backend.AUTO
 
     async def test_bas_full_loss_fails(
         self,
@@ -240,6 +252,29 @@ class TestPingBasedChecks:
         assert result.status is CheckResultStatus.FAIL
         assert result.summary == "BAS 不可达"
         assert any("物理连接" in item for item in result.suggestions)
+        assert fake_http.calls == [MIUI_ROM_204_URL], "BAS 不通时应当去探 generate_204"
+
+    @pytest.mark.parametrize(
+        ("pattern", "loss_percent"),
+        [
+            ((True, False), 50),
+            ((True, True, True, False), 25),
+        ],
+    )
+    async def test_bas_partial_loss_warns(
+        self,
+        session: RunSession,
+        pinger: FakePinger,
+        pattern: tuple[bool, ...],
+        loss_percent: int,
+    ) -> None:
+        """``0 < 成功数 < 总数``：以前 FakePinger 只能全成功或全超时，这条分支不可达。"""
+        pinger.set_pattern(str(BAS_IP), pattern)
+        result = await run_check(BASCheck, session)
+        assert result.status is CheckResultStatus.WARN
+        assert result.summary == "BAS 可达，但存在丢包"
+        assert any(f"丢包率 {loss_percent}%" in item for item in result.warnings)
+        assert any("检查网线" in item for item in result.suggestions)
 
     async def test_bas_unreachable_but_public_net_works_hints_wrong_network(
         self,
@@ -261,6 +296,17 @@ class TestPingBasedChecks:
         result = await run_check(SrunReachabilityCheck, session)
         assert result.status is CheckResultStatus.FAIL
         assert result.summary == "深澜认证服务器不可达"
+
+    async def test_srun_reachability_partial_loss_warns(
+        self,
+        session: RunSession,
+        pinger: FakePinger,
+    ) -> None:
+        pinger.set_pattern(str(SRUN_IP), (True, False, True, False))
+        result = await run_check(SrunReachabilityCheck, session)
+        assert result.status is CheckResultStatus.WARN
+        assert result.summary == "深澜认证服务器可达，但存在丢包"
+        assert any("丢包率 50%" in item for item in result.warnings)
 
     async def test_public_net_pass(
         self,
@@ -287,6 +333,23 @@ class TestPingBasedChecks:
         assert result.summary == "公网可达"
         assert result.status is CheckResultStatus.WARN
         assert any("阿里主DNS不可达" in item for item in result.warnings)
+
+    async def test_public_net_partial_loss_warns_on_loss_rate(
+        self,
+        session: RunSession,
+        pinger: FakePinger,
+        fake_http: FakeHttp,
+    ) -> None:
+        """丢包但不全丢：警告里要报出丢包率，结论仍由 HTTP 探针决定。"""
+        fake_http.add_no_content(MIUI_ROM_204_URL)
+        pinger.set_pattern("223.5.5.5", (True, False))
+
+        result = await run_check(PublicNetCheck, session)
+
+        assert result.status is CheckResultStatus.WARN
+        assert result.summary == "公网可达"
+        assert any("丢包率 50%" in item for item in result.warnings)
+        assert any("检查网线" in item for item in result.suggestions)
 
     async def test_public_net_redirect_hints_portal_capture(
         self,
@@ -567,6 +630,20 @@ class TestISPCheck:
         assert result.status is CheckResultStatus.FAIL
         assert result.summary == "未获取到运营商信息"
 
+    async def test_gateway_partial_loss_warns(
+        self,
+        session: RunSession,
+        pinger: FakePinger,
+    ) -> None:
+        session.context.isp_id = SrunProductId.CHINA_TELECOM
+        pinger.set_pattern("60.176.40.1", (True, False))
+
+        result = await run_check(ISPCheck, session)
+
+        assert result.status is CheckResultStatus.WARN
+        assert result.summary == "中国电信网关可达，但存在丢包"
+        assert any("丢包率 50%" in item for item in result.warnings)
+
 
 # ---------------------------------------------------------------------------
 # 代理
@@ -658,6 +735,119 @@ class TestDetectEnvProxy:
 
     def test_returns_empty_for_plain_dict(self) -> None:
         assert detect_env_proxy({}) == []
+
+
+class TestSystemProxyParsing:
+    """系统代理的**解析**逻辑：不依赖真机。
+
+    macOS 分支手上没有机器，但 ``scutil --proxy`` 的输出格式是稳定的，
+    把解析钉住即可；Windows 分支打桩注册表。
+    """
+
+    def test_macos_scutil_output_is_parsed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        output = (
+            "<dictionary> {\n"
+            "  HTTPEnable : 1\n"
+            "  HTTPPort : 7890\n"
+            "  HTTPProxy : 127.0.0.1\n"
+            "  HTTPSEnable : 0\n"
+            "  SOCKSEnable : 1\n"
+            "  ExceptionsList : <array> {\n"
+            "    0 : *.local\n"
+            "  }\n"
+            "}\n"
+        )
+
+        class _Completed:
+            stdout = output
+
+        monkeypatch.setattr(subprocess, "run", lambda *_args, **_kwargs: _Completed())
+        monkeypatch.setattr(sys, "platform", "darwin")
+
+        hits = detect_system_proxy()
+
+        assert [(hit.source, hit.detail) for hit in hits] == [
+            ("系统代理", "HTTP"),
+            ("系统代理", "SOCKS"),
+        ]
+
+    def test_macos_scutil_failure_returns_no_hits(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def boom(*_args: object, **_kwargs: object) -> object:
+            raise OSError("scutil 不存在")
+
+        monkeypatch.setattr(subprocess, "run", boom)
+        monkeypatch.setattr(sys, "platform", "darwin")
+
+        assert detect_system_proxy() == []
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="winreg 仅 Windows 有")
+    def test_windows_registry_values_are_mapped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import winreg  # noqa: PLC0415 - winreg 仅 Windows 有，模块级导入会让 Linux 收集失败
+
+        values: dict[str, object] = {
+            "ProxyEnable": 1,
+            "ProxyServer": "10.0.0.1:8080;http=127.0.0.1:7890",
+            "AutoConfigURL": "",
+        }
+
+        class _Key:
+            def __enter__(self) -> Self:
+                return self
+
+            def __exit__(self, *_exc: object) -> bool:
+                return False
+
+        def fake_query(_key: object, name: str) -> tuple[object, int]:
+            if name not in values:
+                raise FileNotFoundError(name)
+            return values[name], 4
+
+        monkeypatch.setattr(winreg, "OpenKey", lambda *_args, **_kwargs: _Key())
+        monkeypatch.setattr(winreg, "QueryValueEx", fake_query)
+
+        hits = detect_system_proxy()
+
+        assert [(hit.source, hit.detail) for hit in hits] == [("系统代理", "10.0.0.1:8080")], (
+            "本机环回代理（用户自己开的加速器）应当被过滤掉"
+        )
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="winreg 仅 Windows 有")
+    def test_windows_pac_url_is_reported(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import winreg  # noqa: PLC0415 - winreg 仅 Windows 有，模块级导入会让 Linux 收集失败
+
+        values: dict[str, object] = {
+            "ProxyEnable": 0,
+            "ProxyServer": "",
+            "AutoConfigURL": "http://pac.example/proxy.pac",
+        }
+
+        class _Key:
+            def __enter__(self) -> Self:
+                return self
+
+            def __exit__(self, *_exc: object) -> bool:
+                return False
+
+        monkeypatch.setattr(winreg, "OpenKey", lambda *_args, **_kwargs: _Key())
+        monkeypatch.setattr(winreg, "QueryValueEx", lambda _key, name: (values[name], 4))
+
+        assert [(hit.source, hit.detail) for hit in detect_system_proxy()] == [
+            ("PAC 自动配置", "http://pac.example/proxy.pac")
+        ]
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="winreg 仅 Windows 有")
+    def test_windows_registry_error_is_swallowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import winreg  # noqa: PLC0415 - winreg 仅 Windows 有，模块级导入会让 Linux 收集失败
+
+        def boom(*_args: object, **_kwargs: object) -> object:
+            raise OSError("读不到注册表项")
+
+        monkeypatch.setattr(winreg, "OpenKey", boom)
+
+        assert detect_system_proxy() == []
 
 
 class TestProxyHelpers:

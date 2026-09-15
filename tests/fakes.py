@@ -18,7 +18,7 @@ from hdu_netdebugger.net.http import HttpResponse
 from hdu_netdebugger.session import RunSession
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Iterable, Mapping, Sequence
 
     from hdu_netdebugger.net.ping import Backend, PingOptions
 
@@ -33,7 +33,12 @@ __all__ = [
 
 
 class FakePinger:
-    """按目标地址给出预置结果的可编程 Pinger。"""
+    """按目标地址给出预置结果的可编程 Pinger。
+
+    默认按 ``reachable`` 集合决定"全成功 / 全超时"；需要**部分丢包**时用
+    :meth:`set_pattern` 直接编排逐包结果 —— 少了它，"0 < 成功数 < 总数"
+    那条分支（四个检查项里都有）在测试里根本不可达。
+    """
 
     def __init__(
         self,
@@ -46,6 +51,7 @@ class FakePinger:
         self.count = count
         self.rtt_ms = rtt_ms
         self.calls: list[tuple[str, PingOptions, Backend]] = []
+        self.patterns: dict[str, tuple[bool, ...]] = {}
 
     def set_reachable(self, target: str, *, reachable: bool = True) -> None:
         """运行期调整某个目标的可达性。"""
@@ -54,6 +60,10 @@ class FakePinger:
         else:
             self.reachable.discard(target)
 
+    def set_pattern(self, target: str, pattern: Sequence[bool]) -> None:
+        """按逐包结果编排某个目标（``True`` 表示该包收到了回复）。"""
+        self.patterns[str(target)] = tuple(pattern)
+
     async def __call__(
         self,
         target: str,
@@ -61,14 +71,16 @@ class FakePinger:
         backend: Backend,
     ) -> MultiPingResult:
         self.calls.append((target, options, backend))
-        alive = target in self.reachable
+        pattern = self.patterns.get(target)
+        if pattern is None:
+            pattern = (target in self.reachable,) * self.count
         replies = tuple(
             PingReply(
                 sequence=index + 1,
                 status=PingStatus.SUCCESS if alive else PingStatus.TIMEOUT,
                 rtt_ms=self.rtt_ms if alive else None,
             )
-            for index in range(self.count)
+            for index, alive in enumerate(pattern)
         )
         return MultiPingResult(target=target, replies=replies)
 

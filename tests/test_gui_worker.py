@@ -230,6 +230,18 @@ class TestGuiEntryPoint:
 
 @pytest.fixture(autouse=True)
 def _cleanup_threads() -> Iterator[None]:
+    """每个用例结束后确认没有仍在运行的 ``QThread``。
+
+    线程没退干净会让解释器退出时挂住，而在测试里这种问题**完全静默**
+    （PySide6 不会报错）。原来的写法是 ``QThread().findChildren(QThread)`` ——
+    在一个临时对象上找子线程，永远是空的；看着像兜底，其实什么都没做。
+    """
     yield
-    for thread in QThread().findChildren(QThread):  # pragma: no cover - 兜底
-        del thread
+    app = QApplication.instance()
+    if not isinstance(app, QApplication):  # pragma: no cover - GUI 测试必然已有 QApplication
+        return
+    roots = [app, *app.topLevelWidgets()]
+    leftovers = [
+        thread for root in roots for thread in root.findChildren(QThread) if thread.isRunning()
+    ]
+    assert leftovers == [], f"有用例留下了未退出的 QThread: {leftovers}"

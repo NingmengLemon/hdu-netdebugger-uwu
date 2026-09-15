@@ -270,10 +270,10 @@ def run(
                 on_progress=None if quiet else reporter.on_progress,
             )
         )
-    except BackendUnavailable as exc:  # pragma: no cover - 极端环境
+    except BackendUnavailable as exc:
         typer.secho(f"无法执行 Ping：{exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(EXIT_TOOL_ERROR) from exc
-    except KeyboardInterrupt:  # pragma: no cover - 交互中断
+    except KeyboardInterrupt:
         typer.secho("已中断。", fg=typer.colors.YELLOW, err=True)
         raise typer.Exit(EXIT_TOOL_ERROR) from None
 
