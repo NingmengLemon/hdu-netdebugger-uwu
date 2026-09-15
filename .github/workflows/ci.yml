@@ -59,6 +59,19 @@ jobs:
         with:
           persist-credentials: false
 
+      # PySide6 的 wheel 自带 Qt 库，但仍依赖系统的 libGL / libEGL / xkbcommon。
+      # 缺了它们 `importorskip("PySide6")` 会静默跳过 GUI 测试 —— 测试照样"通过"，
+      # 但 Linux 上的 GUI 覆盖被悄悄丢掉了。所以显式装齐。
+      - name: 安装 Linux 下 Qt 所需的系统库
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            libgl1 libegl1 libxkbcommon0 libdbus-1-3 libfontconfig1 libglib2.0-0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 \
+            libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0 libxrender1 libxi6 \
+            fonts-wqy-zenhei
+
       - name: 安装 uv
         uses: astral-sh/setup-uv@v5
         with:
@@ -66,6 +79,11 @@ jobs:
 
       - name: 安装依赖
         run: uv sync --all-groups --extra gui --python ${{ matrix.python }}
+
+      - name: 确认 GUI 依赖真的可用（而不是被 importorskip 静默跳过）
+        run: |
+          uv run python -c "from hdu_netdebugger.gui.app import run_app; print('GUI 可导入')"
+          uv run python -c "from PySide6.QtWidgets import QApplication; print('PySide6 可导入')"
 
       - name: 运行测试（含覆盖率门槛）
         run: uv run pytest

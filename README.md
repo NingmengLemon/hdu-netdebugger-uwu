@@ -172,7 +172,31 @@ CI（`.github/workflows/ci.yml`）在 push / PR 时跑：
 
 - `ruff format --check` + `ruff check` + `ty check`
 - Ubuntu / Windows / macOS × Python 3.12 / 3.13 的完整测试矩阵
+  （Linux 会先装齐 Qt 所需的系统库，避免 `importorskip` 静默跳过 GUI 测试）
 - `uv build` 后把 wheel 装进干净虚拟环境，验证 `hnd --version` / `hnd list` 可用
+
+### 跨平台说明
+
+- **类型检查用 `python-platform = "all"`**。项目里有大量按 `sys.platform` 分流的代码
+  （`winreg` / `ctypes.WinDLL` / `get_last_error`）。ty 默认只按当前运行平台解析符号，
+  会导致同一份代码在 Windows 上通过、在 Linux 上报"`winreg` 没有 `OpenKey`"这类假阳性。
+  设为 `all` 后 ty 不预设目标平台，与运行时守卫的写法一致。
+- **界面上的固定符号只用基本多文种平面（BMP）内的字符**。曾经用过 `💡`（U+1F4A1）：
+  Windows 有 Segoe UI Emoji 回退所以看着正常，Debian 默认的 WQY 字体没有该字形，
+  会直接渲染成豆腐块。需要换符号时先跑 `scripts/check_glyphs.py` 在目标平台确认字形；
+  测试里也有断言锁死"界面符号码点 ≤ U+FFFF"。
+- **Linux / macOS 的原始 ICMP 套接字无需 root**：`icmplib` 在 Unix 上用
+  `SOCK_DGRAM` 非特权模式；Windows 上则退回 Win32 `IcmpSendEcho2`（无固定计时误差问题见下）。
+
+### 已在真机验证
+
+| 平台 | 结果 |
+|------|------|
+| Windows 11（本机，杭电校园网，电信出口） | `ruff` / `ty` 全绿，389 用例通过，8 项检查全部通过，GUI 正常 |
+| Debian 13 trixie x86_64（Python 3.13 宿主 / venv 3.12） | `ruff` / `ty` 全绿，389 用例通过（含离屏 GUI 与 QThread），8 项检查全部通过；非 root 用户下 `SOCK_DGRAM` 非特权 ICMP 正常 |
+
+> macOS 分支（`ping -W <ms> -m <ttl>`）已按 `ping(8)` 语义实现并有单测覆盖参数拼装，
+> 但没有真机跑过。
 
 ## 与 C# 原版的差异
 
