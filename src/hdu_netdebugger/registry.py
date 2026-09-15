@@ -25,8 +25,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from hdu_netdebugger.checkers.base import Checker
-    from hdu_netdebugger.config import RunConfig
-    from hdu_netdebugger.context import CheckContext
+    from hdu_netdebugger.session import RunSession
 
 __all__ = [
     "CheckerSpec",
@@ -71,9 +70,9 @@ class CheckerSpec:
     cls: type[Checker]
     conditions: tuple[ConditionSpec, ...] = ()
 
-    def create(self, context: CheckContext, config: RunConfig) -> Checker:
+    def create(self, session: RunSession) -> Checker:
         """实例化检查项。"""
-        return self.cls(context, config)
+        return self.cls(session)
 
 
 _REGISTRY: dict[str, CheckerSpec] = {}

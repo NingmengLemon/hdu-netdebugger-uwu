@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
     from hdu_netdebugger.config import RunConfig
     from hdu_netdebugger.context import CheckContext
+    from hdu_netdebugger.session import RunSession
 
 __all__ = ["Checker", "DetailsLog"]
 
@@ -65,11 +66,22 @@ class Checker(ABC):
     #: 执行顺序，越小越先执行（由装饰器填充）
     order: ClassVar[int] = 0
 
-    def __init__(self, context: CheckContext, config: RunConfig) -> None:
-        self.context = context
-        self.config = config
+    def __init__(self, session: RunSession) -> None:
+        self.session = session
         self._builder = CheckResultBuilder()
         self._details = DetailsLog()
+
+    # -- 便捷访问 ---------------------------------------------------------
+
+    @property
+    def context(self) -> CheckContext:
+        """跨检查项共享状态。"""
+        return self.session.context
+
+    @property
+    def config(self) -> RunConfig:
+        """运行配置。"""
+        return self.session.config
 
     # -- 生命周期 ---------------------------------------------------------
 

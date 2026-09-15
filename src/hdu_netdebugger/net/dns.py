@@ -86,7 +86,16 @@ async def query_a(
         result.error = f"{type(exc).__name__}: {exc}"
         return result
 
-    for record in answer:
-        result.answer_lines.append(f"{record.name} {record.ttl} IN A {record.address}")
-        result.addresses.append(str(record.address))
+    # dnspython 的 Answer 迭代的是 rdata（没有 name/ttl），
+    # 而 RRset 才有；CNAME 链会有多个 RRset，这里把 A 记录全部收集起来，
+    # 与原版 `result.Answers.ARecords()` 的语义一致。
+    for rrset in answer.response.answer:
+        if rrset.rdtype != dns.rdatatype.A:
+            continue
+        for rdata in rrset:
+            result.answer_lines.append(f"{rrset.name} {rrset.ttl} IN A {rdata.address}")
+            result.addresses.append(str(rdata.address))
+
+    if not result.addresses:
+        result.error = f"{domain} 没有 A 记录"
     return result
