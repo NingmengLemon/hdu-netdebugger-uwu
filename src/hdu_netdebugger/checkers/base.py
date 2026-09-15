@@ -108,11 +108,6 @@ class Checker(ABC):
 
     # -- 结论 -------------------------------------------------------------
 
-    @property
-    def result(self) -> CheckResult:
-        """当前累积的结果快照。"""
-        return self._builder.build()
-
     def passed(self, summary: str) -> None:
         """以"通过"结束检查，详情取当前日志。"""
         self._builder.passed(summary, self._details.text)

@@ -36,7 +36,6 @@ __all__ = [
     "get_checker",
     "registered_names",
     "resolve_names",
-    "unregister_all",
 ]
 
 CheckerT = TypeVar("CheckerT", bound="Checker")
@@ -215,8 +214,3 @@ def resolve_names(patterns: list[str]) -> list[CheckerSpec]:
             resolved[spec.name] = spec
 
     return sorted(resolved.values(), key=lambda spec: (spec.order, spec.name))
-
-
-def unregister_all() -> None:
-    """清空注册表（仅供测试使用）。"""
-    _REGISTRY.clear()

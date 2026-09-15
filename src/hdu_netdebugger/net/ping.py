@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import locale
 import re
 import socket
 import sys
@@ -99,7 +100,12 @@ def resolve_target(target: Target) -> str:
         return str(ip_address(text))
     except ValueError:
         pass
-    infos = socket.getaddrinfo(text, None, proto=socket.IPPROTO_ICMP)
+    try:
+        # proto=ICMP 只留下 IPv4 记录（ICMPv6 的协议号是 58），纯 AAAA 的域名
+        # 在这里会拿不到结果，所以失败时退回不带 proto 的查询。
+        infos = socket.getaddrinfo(text, None, proto=socket.IPPROTO_ICMP)
+    except socket.gaierror:
+        infos = socket.getaddrinfo(text, None)
     if not infos:
         raise OSError(f"无法解析目标地址: {text}")
     return str(infos[0][4][0])
@@ -264,7 +270,12 @@ def _windows_icmp_ping(address: str, opts: PingOptions) -> MultiPingResult:
             Ttl=opts.ttl, Tos=0, Flags=0, OptionsSize=0, OptionsData=None
         )
         timeout_ms = max(1, round(opts.timeout_s * 1000))
-        destination = _ipaddr_network_order(address)
+        try:
+            destination = _ipaddr_network_order(address)
+        except ValueError as exc:
+            # IcmpSendEcho 只有 IPv4 版本；抛 BackendUnavailable 才能让 AUTO 降级到
+            # 系统 ping，而不是把一个 ValueError 直接扔给调用方。
+            raise BackendUnavailable(f"IcmpSendEcho 只支持 IPv4: {address}") from exc
 
         replies: list[PingReply] = []
         for sequence in range(1, opts.count + 1):
@@ -408,6 +419,17 @@ def _icmplib_send_one(
 _RTT_PATTERN = re.compile(r"[=<]\s*(\d+(?:\.\d+)?)\s*ms", re.IGNORECASE)
 
 
+def _decode_console_output(raw: bytes) -> str:
+    """解码系统 ``ping`` 的输出。
+
+    Windows 上 ``ping`` 写的是 **OEM 代码页**（中文系统通常是 936），不是 UTF-8 ——
+    即便开了 ``PYTHONUTF8`` 也一样，所以不能拿 locale 编码碰运气。
+    解析只需要 ASCII 的 ``ttl=`` 与 ``ms``，这里的目标只是别把中文字段弄成乱码。
+    """
+    encoding = "oem" if sys.platform == "win32" else locale.getpreferredencoding(do_setlocale=False)
+    return raw.decode(encoding or "utf-8", errors="replace")
+
+
 async def _system_ping(address: str, opts: PingOptions) -> MultiPingResult:
     """调用系统 ``ping`` 命令并解析输出。"""
     args = ["ping", *_system_ping_args(address, opts)]
@@ -430,7 +452,7 @@ async def _system_ping(address: str, opts: PingOptions) -> MultiPingResult:
         await process.wait()
         raise BackendUnavailable("系统 ping 命令超时") from exc
 
-    return _parse_system_ping(address, stdout.decode(errors="replace"), opts)
+    return _parse_system_ping(address, _decode_console_output(stdout), opts)
 
 
 def _system_ping_args(address: str, opts: PingOptions) -> list[str]:

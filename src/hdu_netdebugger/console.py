@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from rich.console import Console, Group
+from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
@@ -21,7 +21,6 @@ from hdu_netdebugger.theme import CHECK_STATUS_STYLES, SUGGESTION_MARK, WARNING_
 if TYPE_CHECKING:
     from rich.console import RenderableType
 
-    from hdu_netdebugger.models.enums import CheckStatus
     from hdu_netdebugger.models.result import CheckOutcome
     from hdu_netdebugger.registry import CheckerSpec
     from hdu_netdebugger.runner import ProgressEvent, RunResult
@@ -199,30 +198,6 @@ def render_doctor(items: list[tuple[str, str, bool, str]]) -> RenderableType:
     return table
 
 
-def render_check_outcome(outcome: CheckOutcome) -> RenderableType:
-    """把单个检查项渲染成一段可折叠内容（GUI/调试用）。"""
-    blocks: list[RenderableType] = [
-        Text.assemble(
-            (f"{icon_for(outcome.status)} ", CHECK_STATUS_STYLES[outcome.status]),
-            (f"{outcome.name}\n", "bold"),
-            (outcome.summary, CHECK_STATUS_STYLES[outcome.status]),
-        )
-    ]
-    if outcome.warnings:
-        blocks.append(
-            Text("\n".join(f"{WARNING_MARK} {item}" for item in outcome.warnings), style="yellow")
-        )
-    if outcome.suggestions:
-        blocks.append(
-            Text(
-                "\n".join(f"{SUGGESTION_MARK} {item}" for item in outcome.suggestions), style="cyan"
-            )
-        )
-    if outcome.details:
-        blocks.append(Text(outcome.details, style="dim"))
-    return Group(*blocks)
-
-
 def make_console(*, stderr: bool = False, quiet: bool = False) -> Console:
     """构造统一的 rich Console。"""
     return Console(
@@ -232,8 +207,3 @@ def make_console(*, stderr: bool = False, quiet: bool = False) -> Console:
         soft_wrap=False,
         emoji=True,
     )
-
-
-def is_problem_status(status: CheckStatus) -> bool:
-    """状态是否需要用户关注。"""
-    return status.is_problem

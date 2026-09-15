@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import locale
 import socket
 import sys
 import threading
@@ -138,9 +139,41 @@ class TestResolveTarget:
     def test_localhost_resolves(self) -> None:
         assert resolve_target("localhost") in {"127.0.0.1", "::1"}
 
-    def test_invalid_hostname_raises(self) -> None:
+    def test_invalid_hostname_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """不依赖真实 DNS。
+
+        ``.invalid`` 在正常解析器上必然失败，但在**劫持型 DNS**（本工具要诊断的
+        场景之一）上可能被解析成功 —— 那样这条用例就会假失败。
+        """
+
+        def fake_getaddrinfo(*_args: object, **_kwargs: object) -> list[object]:
+            raise socket.gaierror("Name or service not known")
+
+        monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+
         with pytest.raises(OSError):
             resolve_target("this-host-does-not-exist.invalid")
+
+    def test_ipv6_only_hostname_falls_back(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``proto=IPPROTO_ICMP`` 只返回 IPv4 记录，纯 AAAA 的域名要能退回查询。"""
+        protos: list[int] = []
+
+        def fake_getaddrinfo(
+            _host: str,
+            _port: object,
+            *,
+            proto: int = 0,
+            **_kwargs: object,
+        ) -> list[tuple[int, int, int, str, tuple[str, int, int, int]]]:
+            protos.append(proto)
+            if proto == socket.IPPROTO_ICMP:
+                raise socket.gaierror("no IPv4 record")
+            return [(socket.AF_INET6, socket.SOCK_DGRAM, 58, "", ("2001:db8::1", 0, 0, 0))]
+
+        monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+
+        assert resolve_target("ipv6-only.example") == "2001:db8::1"
+        assert protos == [socket.IPPROTO_ICMP, 0]
 
 
 # ---------------------------------------------------------------------------
@@ -445,6 +478,36 @@ class TestWindowsIcmpHelpers:
     def test_ipaddr_differs_from_host_order_int(self) -> None:
         """回归：旧实现用 ``int(IPv4Address(...))``，会把 192.0.2.1 实际打成 1.40.16.172。"""
         assert ping_module._ipaddr_network_order("192.0.2.1") != int(IPv4Address("192.0.2.1"))
+
+    def test_ipv6_is_rejected_by_ipaddr_helper(self) -> None:
+        with pytest.raises(ValueError):
+            ping_module._ipaddr_network_order("2001:db8::1")
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="IcmpSendEcho 仅在 Windows 上可用")
+    def test_ipv6_target_degrades_to_backend_unavailable(self) -> None:
+        """IcmpSendEcho 只有 IPv4 版本；要抛 BackendUnavailable 才能让 AUTO 降级。"""
+        with pytest.raises(BackendUnavailable, match="只支持 IPv4"):
+            ping_module._windows_icmp_ping("2001:db8::1", PingOptions(count=1))
+
+
+class TestConsoleOutputDecoding:
+    """系统 ``ping`` 输出的解码。
+
+    Windows 写的是 OEM 代码页（中文系统通常是 936），不是 UTF-8；即便开了
+    ``PYTHONUTF8`` 也一样。这里用"按被测编码往返"的方式把选择钉住：如果实现改成
+    硬用 UTF-8，中文就解不出来，用例会挂。
+    """
+
+    def test_round_trip_keeps_chinese_text(self) -> None:
+        text = "来自 10.150.0.1 的回复: 字节=32 时间=2ms TTL=64"
+        encoding = (
+            "oem" if sys.platform == "win32" else locale.getpreferredencoding(do_setlocale=False)
+        )
+
+        assert ping_module._decode_console_output(text.encode(encoding)) == text
+
+    def test_undecodable_bytes_do_not_raise(self) -> None:
+        assert isinstance(ping_module._decode_console_output(b"\xff\xfe\x00abc"), str)
 
 
 class _WindowsReplyStub:
@@ -993,7 +1056,17 @@ class TestListInterfaces:
 
     @pytest.mark.parametrize(
         ("bits_per_second", "expected"),
-        [(0, None), (-1, None), (100_000, 1), (1_000_000, 1), (1_000_000_000, 1000)],
+        [
+            (0, None),
+            (-1, None),
+            (100_000, 1),
+            (1_000_000, 1),
+            (1_000_000_000, 1000),
+            (10_000_000_000, 10_000),
+            # Windows 用哨兵值表示"速率未知"，换算出来会是 1.8e13 Mbps 这种垃圾数字
+            (2**64 - 1, None),
+            (1 << 40, None),
+        ],
     )
     def test_link_speed_conversion(self, bits_per_second: int, expected: int | None) -> None:
         assert interfaces_module._link_speed_mbps(bits_per_second) == expected

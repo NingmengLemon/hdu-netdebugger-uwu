@@ -266,9 +266,18 @@ def _windows_unicast_addresses(
     return tuple(ipv4), tuple(ipv6)
 
 
+#: 真实网卡速率的上界：800GbE 也只有 8e11 bit/s，2^40（约 1.1 Tbps）之上
+#: 只可能是 Windows 用来表示"速率未知"的哨兵值。
+_MAX_PLAUSIBLE_LINK_SPEED_BPS = 1 << 40
+
+
 def _link_speed_mbps(bits_per_second: int) -> int | None:
-    """把链路速率（bit/s）换算成 Mbps；无意义的值返回 ``None``。"""
-    if bits_per_second <= 0:
+    """把链路速率（bit/s）换算成 Mbps；无意义的值返回 ``None``。
+
+    Windows 对"未知速率"给的是 ``0xFFFFFFFFFFFFFFFF`` 这类哨兵值，
+    照直换算会得到 ``18446744073710`` Mbps 这种垃圾数字（本机 WLAN 网卡实测如此）。
+    """
+    if bits_per_second <= 0 or bits_per_second >= _MAX_PLAUSIBLE_LINK_SPEED_BPS:
         return None
     return max(1, round(bits_per_second / 1_000_000))
 
