@@ -1,37 +1,185 @@
 [project]
 name = "hdu-netdebugger-uwu"
 version = "0.1.0"
-description = "Add your description here"
+description = "HDU 校园网诊断工具 — HDU-NetDebugger 的 Python 复刻版 (CLI 优先, PySide6 可选 GUI)"
 readme = "README.md"
+license = "MIT"
 authors = [
     { name = "NingmengLemon", email = "60469383+NingmengLemon@users.noreply.github.com" }
+]
+keywords = ["hdu", "campus-network", "network-diagnostics", "cli", "pyside6"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Networking :: Monitoring",
+    "Typing :: Typed",
 ]
 requires-python = ">=3.12"
 dependencies = [
     "dnspython>=2.8.0",
     "httpx>=0.28.1",
+    "icmplib>=3.0.4",
     "psutil>=7.2.2",
     "rich>=15.0.0",
     "typer>=0.27.2",
 ]
-
-[project.scripts]
-hdu-netdebugger-uwu = "hdu_netdebugger_uwu:main"
 
 [project.optional-dependencies]
 gui = [
     "pyside6>=6.11.2",
 ]
 
+[project.urls]
+Upstream = "https://github.com/HDU-ICU/HDU_NetDebugger"
+
+[project.scripts]
+hdu-netdebugger = "hdu_netdebugger.cli:main"
+hnd = "hdu_netdebugger.cli:main"
+
 [build-system]
 requires = ["uv_build>=0.12.10,<0.13.0"]
 build-backend = "uv_build"
 
+[tool.uv.build-backend]
+module-name = "hdu_netdebugger"
+module-root = "src"
+
 [dependency-groups]
 dev = [
-    "pytest>=9.1.1",
-    "pytest-asyncio>=1.4.0",
-    "pytest-cov>=7.1.0",
+    { include-group = "lint" },
+    { include-group = "test" },
+]
+lint = [
     "ruff>=0.16.7",
     "ty>=0.0.81",
+]
+test = [
+    "pytest>=8.4.0",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+]
+
+# ---------------------------------------------------------------------------
+# ruff — lint + format (replaces flake8 / black / isort / pyupgrade)
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+extend-exclude = [".venv", ".agents"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "ANN401",  # Dynamically typed expressions (typing.Any) are disallowed
+    "BLE001",  # checkers deliberately catch broad exceptions and report them
+    "C901",    # function is too complex
+    "COM812",  # trailing comma missing (conflicts with formatter)
+    "CPY001",  # missing copyright notice at top of file (LICENSE covers it)
+    "D",       # docstring convention (project uses a bilingual, freer style)
+    "DTZ005",  # datetime.now() without tzinfo — report timestamps are local
+    "E501",    # line too long (formatter owns line width)
+    "EM101",   # exception must not use a string literal
+    "EM102",   # exception must not use an f-string literal
+    "FBT001",  # boolean-typed positional argument
+    "FBT002",  # boolean default positional argument
+    "FIX002",  # line contains TODO
+    "G004",    # logging statement uses f-string
+    "ISC001",  # single-line implicit string concat (conflicts with formatter)
+    "N818",    # exception name should end with Error
+    "PLR0911", # too many return statements
+    "PLR0912", # too many branches
+    "PLR0913", # too many arguments in function definition
+    "PLR0915", # too many statements
+    "PLR2004", # magic value used in comparison
+    "RUF001",  # ambiguous unicode character in string (Chinese full-width punctuation)
+    "RUF002",  # ambiguous unicode character in docstring
+    "RUF003",  # ambiguous unicode character in comment
+    "S603",    # subprocess call: check for execution of untrusted input
+    "S607",    # starting a process with a partial executable path (system ping)
+    "TD002",   # missing author in TODO
+    "TD003",   # missing issue link on TODO
+    "TRY003",  # long messages outside the exception class
+    "TRY301",  # abstract raise to an inner function
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "ANN",     # no annotations required in tests
+    "ARG001",  # unused fixture arguments
+    "ARG002",  # unused method arguments (mock stubs)
+    "PLR0904", # too many public methods in a test class
+    "PT011",   # pytest.raises too broad
+    "S101",    # assert is the pytest idiom
+    "SLF001",  # tests may touch private helpers
+]
+"src/hdu_netdebugger/gui/**" = [
+    "ERA001",  # commented-out code kept as QSS/layout notes
+    "N802",    # Qt overrides use camelCase (paintEvent, sizeHint, ...)
+    "N815",    # Qt mixedCase attributes
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["hdu_netdebugger"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "parents"
+
+[tool.ruff.format]
+docstring-code-format = true
+
+# ---------------------------------------------------------------------------
+# ty — type checker (replaces mypy / pyright)
+# ---------------------------------------------------------------------------
+[tool.ty.environment]
+python-version = "3.12"
+
+[tool.ty.src]
+include = ["src", "tests"]
+
+[tool.ty.terminal]
+output-format = "full"
+error-on-warning = false
+
+[tool.ty.rules]
+possibly-unresolved-reference = "error"
+unused-ignore-comment = "warn"
+
+[[tool.ty.overrides]]
+include = ["tests/**"]
+
+[tool.ty.overrides.rules]
+possibly-unresolved-reference = "warn"
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--cov=hdu_netdebugger",
+    "--cov-report=term-missing:skip-covered",
+    "--cov-fail-under=80",
+]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+branch = true
+source = ["src/hdu_netdebugger"]
+
+[tool.coverage.report]
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
 ]
