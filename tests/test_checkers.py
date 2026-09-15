@@ -33,7 +33,7 @@ from hdu_netdebugger.context import CheckContext
 from hdu_netdebugger.models.enums import CheckResultStatus
 from hdu_netdebugger.models.interface import InterfaceInfo, InterfaceKind
 from hdu_netdebugger.net.dns import DnsResult
-from tests.fakes import FakeHttp, FakePinger, srun_jsonp
+from tests.fakes import FakeHttp, FakePinger, make_session, srun_jsonp
 
 if TYPE_CHECKING:
     from hdu_netdebugger.models.result import CheckResult
@@ -607,6 +607,33 @@ class TestProxyCheck:
     ) -> None:
         monkeypatch.setattr("hdu_netdebugger.checkers.proxy.detect_system_proxy", list)
         monkeypatch.setenv("HTTPS_PROXY", PROXY_URL)
+        result = await run_check(ProxyCheck, session)
+        assert result.status is CheckResultStatus.FAIL
+
+    async def test_env_proxy_ignored_when_disabled(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """回归：``--no-env-proxy`` 一边让请求绕开代理、一边把检查判失败。"""
+        monkeypatch.setattr("hdu_netdebugger.checkers.proxy.detect_system_proxy", list)
+        monkeypatch.setenv("HTTPS_PROXY", PROXY_URL)
+        session = make_session(trust_env_proxy=False)
+        result = await run_check(ProxyCheck, session)
+        assert result.status is CheckResultStatus.PASS
+        assert result.summary == "未检测到代理配置"
+        assert "--no-env-proxy" in (result.details or "")
+
+    async def test_system_proxy_still_counts_when_env_proxy_disabled(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``--no-env-proxy`` 只管环境变量；系统代理是另一回事，照旧判定。"""
+        monkeypatch.setattr(
+            "hdu_netdebugger.checkers.proxy.detect_system_proxy",
+            lambda: [ProxyHit(source="系统代理", detail="10.0.0.1:8080")],
+        )
+        monkeypatch.setenv("HTTPS_PROXY", PROXY_URL)
+        session = make_session(trust_env_proxy=False)
         result = await run_check(ProxyCheck, session)
         assert result.status is CheckResultStatus.FAIL
 

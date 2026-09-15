@@ -7,6 +7,10 @@
 
 Python 生态没有「系统代理」的统一 API，因此这里按平台读取真实的系统代理配置：
 Windows 读 WinINET 注册表项，macOS 调 ``scutil --proxy``，其余平台跳过并说明原因。
+
+环境变量这一路要服从 ``--no-env-proxy``（:attr:`RunConfig.trust_env_proxy`）：
+显式忽略时只记录不判定，否则会出现"请求确实绕开了代理，检查却判失败"的矛盾。
+系统代理不受该开关影响（它本来也不参与本工具自己的 HTTP 请求）。
 """
 
 from __future__ import annotations
@@ -41,19 +45,21 @@ class ProxyCheck(Checker):
     """检测系统代理与环境变量代理。"""
 
     async def check(self) -> None:
-        hits: list[ProxyHit] = []
-
         self.log('--使用方法 "系统代理设置" 进行代理检测--')
         system_hits = await asyncio.to_thread(detect_system_proxy)
         self._log_hits(system_hits)
-        hits.extend(system_hits)
 
         self.log()
         self.log('--使用方法 "环境变量代理" 进行代理检测--')
         env_hits = detect_env_proxy(os.environ)
         self._log_hits(env_hits)
-        hits.extend(env_hits)
+        if env_hits and not self.config.trust_env_proxy:
+            # 用户显式要求忽略环境变量代理，那就只记录、不判为问题 ——
+            # 否则 --no-env-proxy 一边生效（HTTP 请求确实绕开代理）一边把检查判失败。
+            self.log("本次运行指定了 --no-env-proxy，环境变量代理不参与判定。")
+            env_hits = []
 
+        hits = [*system_hits, *env_hits]
         if hits:
             self.add_warning("检测到代理配置，可能会影响连接。")
             self.add_suggestion("请检查系统代理设置并关闭代理，或取消相关环境变量的设置。")

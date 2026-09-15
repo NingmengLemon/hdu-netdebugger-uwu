@@ -216,7 +216,10 @@ def run(
     ] = False,
     no_env_proxy: Annotated[
         bool,
-        typer.Option("--no-env-proxy", help="忽略 HTTP_PROXY / HTTPS_PROXY 环境变量直连。"),
+        typer.Option(
+            "--no-env-proxy",
+            help="本次运行忽略 HTTP_PROXY 等环境变量代理（系统代理仍会检测并提示）。",
+        ),
     ] = False,
 ) -> None:
     """执行校园网检查（默认命令）。"""

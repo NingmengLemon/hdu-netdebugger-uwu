@@ -90,7 +90,7 @@ uv run hnd gui                  # 启动 PySide6 图形界面
 | `--timeout SEC` | 单次 Ping 超时（默认 `1.0`） |
 | `--ping-count N` | 每个目标 Ping 次数（默认 `4`） |
 | `--insecure` | 跳过 TLS 证书校验（校园网自签证书场景） |
-| `--no-env-proxy` | 忽略 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量直连 |
+| `--no-env-proxy` | 本次运行忽略 `HTTP_PROXY` / `HTTPS_PROXY` 等环境变量代理（系统代理仍会检测并提示） |
 | `--dns-server IP` | 覆盖查询用的 DNS 服务器 |
 
 退出码：`0` 全部通过 · `1` 存在警告 · `2` 存在失败 · `3` 工具自身错误（含参数写错等用法错误）。
