@@ -123,13 +123,17 @@ uv run python scripts/gui_smoke.py out.png              # 真跑一轮检查再�
 ```text
 src/hdu_netdebugger/
 ├── cli.py            # Typer CLI 入口
+├── config.py         # 一次运行的参数（Ping / HTTP / DNS / TLS / 代理开关）
+├── console.py        # 终端渲染（横幅、逐项输出、结论面板、doctor 表格）
 ├── constants.py      # 杭电网络常量（网段 / 服务器 IP / 深澜错误码 / 运营商映射）
 ├── context.py        # 检查间共享状态（取代原版 GlobalFlagList）
 ├── registry.py       # @checker / @condition 装饰器与检查项注册表
 ├── runner.py         # 编排：条件判定 → 执行 → 汇总裁剪
 ├── report.py         # Markdown / JSON 报告生成
-├── models/           # 数据模型（检查结果、深澜响应、Ping 结果）
-├── net/              # 网络能力（异步 Ping、HTTP、DNS）
+├── session.py        # 一次运行共享的资源（配置 / 状态 / HTTP 池 / Ping 实现）
+├── theme.py          # 状态 → 图标 / 颜色的唯一映射（CLI 与 GUI 共用）
+├── models/           # 数据模型（检查结果、深澜响应、Ping 结果、网卡）
+├── net/              # 网络能力（异步 Ping、HTTP、DNS、网卡枚举）
 ├── checkers/         # 8 个检查项实现
 └── gui/              # PySide6 可选图形界面
 ```
@@ -167,17 +171,19 @@ uv run pytest
 - **[uv](https://docs.astral.sh/uv/)** — 依赖与虚拟环境管理
 - **[ruff](https://docs.astral.sh/ruff/)** — lint + format（替代 flake8 / black / isort），`select = ["ALL"]` + 逐条说明理由的 ignore
 - **[ty](https://docs.astral.sh/ty/)** — 类型检查（替代 mypy / pyright）
-- **pytest + pytest-asyncio + coverage** — 380 个用例，覆盖率门槛 80%（当前 ~90%）
+- **pytest + pytest-asyncio + coverage** — 470 个用例，覆盖率门槛 80%（当前 ~94%）
 
-所有网络调用都通过 `RunSession` 注入，因此测试用
+所有网络调用都通过 `RunSession` 注入，因此**检查项**测试用
 `tests/fakes.py` 里的 `FakePinger` / `FakeHttp` 就能在毫秒内跑完 8 个检查项，
-不产生任何真实流量，也不需要联网。GUI 用 Qt 的 `offscreen` 平台插件离屏测试。
+不产生任何真实流量，也不需要联网。`net/` 那一层的测试会打本机回环
+（ICMP、127.0.0.1 上的临时 HTTP 服务），同样不依赖外网。
+GUI 用 Qt 的 `offscreen` 平台插件离屏测试。
 
 CI（`.github/workflows/ci.yml`）在 push / PR 时跑：
 
 - `ruff format --check` + `ruff check` + `ty check`
 - Ubuntu / Windows / macOS × Python 3.12 / 3.13 的完整测试矩阵
-  （Linux 会先装齐 Qt 所需的系统库，避免 `importorskip` 静默跳过 GUI 测试）
+  （Linux 会先装齐 Qt 所需的系统库；GUI 测试模块在缺依赖时直接报错，不会静默跳过）
 - `uv build` 后把 wheel 装进干净虚拟环境，验证 `hnd --version` / `hnd list` 可用
 
 ### 跨平台说明
@@ -191,17 +197,18 @@ CI（`.github/workflows/ci.yml`）在 push / PR 时跑：
   会直接渲染成豆腐块。需要换符号时先跑 `scripts/check_glyphs.py` 在目标平台确认字形；
   测试里也有断言锁死"界面符号码点 ≤ U+FFFF"。
 - **Linux / macOS 的原始 ICMP 套接字无需 root**：`icmplib` 在 Unix 上用
-  `SOCK_DGRAM` 非特权模式；Windows 上则退回 Win32 `IcmpSendEcho2`（无固定计时误差问题见下）。
+  `SOCK_DGRAM` 非特权模式；Windows 上原始套接字要管理员权限，因此普通用户会自动
+  降级到 `iphlpapi!IcmpSendEcho`（ctypes 调用，无需任何权限）。
 
 ### 已在真机验证
 
 | 平台 | 结果 |
 |------|------|
-| Windows 11（本机，杭电校园网，电信出口） | `ruff` / `ty` 全绿，389 用例通过，8 项检查全部通过，GUI 正常 |
-| Debian 13 trixie x86_64（Python 3.13 宿主 / venv 3.12） | `ruff` / `ty` 全绿，389 用例通过（含离屏 GUI 与 QThread），8 项检查全部通过；非 root 用户下 `SOCK_DGRAM` 非特权 ICMP 正常 |
+| Windows 10 IoT 企业版 LTSC 19044（本机，杭电校园网生活区，电信出口） | `ruff` / `ty` 全绿；470 个用例中 469 通过、1 项平台跳过（覆盖率 ~94%）。8 项检查逐项可达：本机在路由器后且开着 Mihomo，`获取基本信息` / `检查代理状态` 按设计给出对隧道网卡的警告，其余 6 项通过 |
+| Debian 13 trixie x86_64（Python 3.13 宿主 / venv 3.12） | `ruff` / `ty` 全绿，完整测试套件通过（含离屏 GUI 与 QThread）；非 root 用户下 `SOCK_DGRAM` 非特权 ICMP 正常 |
 
-> macOS 分支（`ping -W <ms> -m <ttl>`）已按 `ping(8)` 语义实现并有单测覆盖参数拼装，
-> 但没有真机跑过。
+> macOS 分支（`ping -W <ms> -m <ttl>`）按 `ping(8)` 语义实现，参数拼装（含 BSD 的
+> 毫秒与 GNU 的秒之差）已用改 `sys.platform` 的方式单测覆盖，但**没有真机跑过**。
 
 ## 与 C# 原版的差异
 
@@ -209,17 +216,20 @@ CI（`.github/workflows/ci.yml`）在 push / PR 时跑：
 |------|--------|
 | C# 特性 + 反射扫描注册检查项 | Python 装饰器 `@checker(...)` 注册，显式可读；条件用 `@condition(...)`，且支持子类覆盖 |
 | `ConcurrentDictionary<string, object> GlobalFlagList` | 强类型 `CheckContext` 数据类 |
-| `System.Net.NetworkInformation.Ping` | 三级后端：`icmplib` 原始套接字 → Win32 `IcmpSendEcho2` → 系统 `ping` 命令，自动降级 |
+| `System.Net.NetworkInformation.Ping` | 三级后端：`icmplib` 原始套接字 → Win32 `IcmpSendEcho` → 系统 `ping` 命令，自动降级 |
 | `DnsClient` | `dnspython` 异步解析器，可指定 DNS 服务器 |
 | `HttpClient` | `httpx.AsyncClient`（默认不跟随重定向、不保留 Cookie） |
 | MVVM + Avalonia | Typer CLI（主）+ PySide6 可选 GUI |
-| 无测试 | 380 个 pytest 用例 + GitHub Actions CI |
+| 无测试 | 470 个 pytest 用例 + GitHub Actions CI |
 
-实现过程中还修正了原版的两处小问题：
+实现过程中还修正（或发现）了原版的几处问题：
 
 - `AddWarning("")` 会把结论从"通过"提升为"警告"，却一条警告都没记录 —— 现在空白消息不再改变状态。
 - 检查项的"命名空间更深者覆盖前者"是隐式行为，现在改成语义明确的 `override=True`，
   重名注册默认直接报错，不会静默失效。
+- 复刻时曾把 `IcmpSendEcho` 的目标地址按主机序传入（该 API 要的是网络序），
+  结果 Windows 上非管理员用户的保底后端会去 ping 另一个地址，把通的目标全报成超时 ——
+  现在用 `_ipaddr_network_order()` 并按 packed 字节小端解释，另有真机回归用例。
 
 ## License
 
