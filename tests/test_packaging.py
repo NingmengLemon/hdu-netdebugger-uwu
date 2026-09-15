@@ -88,6 +88,20 @@ def test_spec_builds_console_and_windowed_variants() -> None:
     assert "excludes=QT_MODULES" in text
 
 
+def test_spec_pins_python_openssl() -> None:
+    """OpenSSL 必须钉回 CPython 自带的那份.
+
+    回归：Qt 的 TLS 插件依赖 ``libssl-3-x64.dll`` / ``libcrypto-3-x64.dll`` 但自己
+    目录里没有，PyInstaller 会顺着 PATH 捞 —— 本机 PATH 上有 OpenJ9 的 Java，
+    于是把 Java 那份收进包、挤掉了 CPython 的，冻结的 GUI 一发起 HTTPS 就
+    ``DLL load failed while importing _ssl``（还会被兜成一句普通的"失败"结论）。
+    """
+    text = (PACKAGING / "hnd.spec").read_text(encoding="utf-8")
+    assert "pin_python_openssl(analysis)" in text, "spec 里没有调用 OpenSSL 钉回逻辑"
+    assert "OPENSSL_DIR" in text
+    assert "libcrypto-3-x64.dll" in text
+
+
 def test_entries_delegate_to_package_entry_points() -> None:
     """入口脚本是薄壳，真正的入口在包里 —— 免得复制一份逻辑出来各自漂移。"""
     cli = (PACKAGING / "entry_cli.py").read_text(encoding="utf-8")

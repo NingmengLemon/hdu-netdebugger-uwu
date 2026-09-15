@@ -417,7 +417,25 @@ def _dependency_checks() -> list[tuple[str, str, bool, str]]:
             "hnd gui 需要它；uv sync --extra gui",
         )
     )
+    checks.append(_ssl_check())
     return checks
+
+
+def _ssl_check() -> tuple[str, str, bool, str]:
+    """真实导入 ``ssl``，并报出 OpenSSL 版本。
+
+    ``ssl`` 是最容易在冻结包里坏掉的模块：``_ssl`` 是 C 扩展，依赖 OpenSSL 的 DLL。
+    打包时若混进**版本不匹配**的 OpenSSL（PATH 上任何装了 ``libssl-3-x64.dll`` 的
+    软件都可能被 PyInstaller 顺走，例如 OpenJ9 的 Java），症状是运行时
+    ``ImportError: DLL load failed while importing _ssl: 找不到指定的程序``。
+    而这种异常会被检查项的兜底捕获、变成一个看起来像"网不通"的普通失败结论 ——
+    所以这里单独自检一次，让它在 ``hnd doctor`` 里暴露出来。
+    """
+    try:
+        import ssl  # noqa: PLC0415 - 就是为了在这里真导一次
+    except ImportError as exc:
+        return ("依赖 ssl（TLS）", f"导入失败: {exc}", False, "打包时可能混入了不匹配的 OpenSSL")
+    return ("依赖 ssl（TLS）", ssl.OPENSSL_VERSION, True, "")
 
 
 def _ping_backend_checks() -> list[tuple[str, str, bool, str]]:

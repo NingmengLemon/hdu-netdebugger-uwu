@@ -376,6 +376,12 @@ class TestDoctor:
         assert "依赖 httpx" in result.stdout
         assert "Ping 后端" in result.stdout
 
+    def test_reports_ssl_and_openssl_version(self) -> None:
+        """``_ssl`` 是冻结包里最容易坏的 C 扩展，doctor 必须真导入一次并报版本。"""
+        result = runner.invoke(app, ["doctor"])
+        assert "依赖 ssl" in result.stdout
+        assert "OpenSSL" in result.stdout
+
 
 # ---------------------------------------------------------------------------
 # gui 子命令

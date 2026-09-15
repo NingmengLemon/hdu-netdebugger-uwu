@@ -58,6 +58,16 @@ def judge(
     missing = [card.spec_name for card in cards if card.outcome is None]
     if missing:
         problems.append("以下检查项没有结果: " + "、".join(missing))
+    # "有结论"不等于"跑正常了"：Checker.execute 会把检查里抛出的异常兜成一个
+    # 普通结论（总览是 "检查执行失败: ..."），于是冻结包里 _ssl 坏掉这种问题
+    # 会伪装成一句"网不通"而让冒烟通过 —— 这里把"抛异常"单列成失败。
+    crashed = [
+        card.spec_name
+        for card in cards
+        if card.outcome is not None and "检查执行失败" in card.outcome.summary
+    ]
+    if crashed:
+        problems.append("以下检查项是抛异常结束的（不是正常诊断结论）: " + "、".join(crashed))
     return problems
 
 

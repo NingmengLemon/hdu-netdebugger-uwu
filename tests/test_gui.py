@@ -449,5 +449,28 @@ class TestGuiSmokeJudge:
         problems = judge(window._cards, saved=True, runtime_errors=["RuntimeError: 炸了"])
         assert problems == ["运行期错误: RuntimeError: 炸了"]
 
+    def test_crashed_checker_is_reported(self, window: MainWindow) -> None:
+        """回归：冻结包里 ``_ssl`` 坏了时，检查项会以"检查执行失败"结束。
+
+        那种结论**长得像普通的诊断失败**（比如"网不通"），只检查"有没有结论"
+        的冒烟会照样通过 —— 所以"抛异常"必须单列成失败。
+        """
+        self._apply_all(window)
+        card = window._cards[0]
+        card.apply(
+            CheckOutcome(
+                name=card.spec_name,
+                order=0,
+                status=CheckStatus.FAILED,
+                summary="检查执行失败: DLL load failed while importing _ssl",
+            )
+        )
+
+        problems = judge(window._cards, saved=True, runtime_errors=[])
+
+        assert len(problems) == 1
+        assert "抛异常" in problems[0]
+        assert card.spec_name in problems[0]
+
     def test_empty_registry_is_reported(self) -> None:
         assert judge([], saved=True, runtime_errors=[]) == ["没有注册任何检查项"]
