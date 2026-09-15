@@ -230,7 +230,7 @@ uv run pytest
 - **[uv](https://docs.astral.sh/uv/)** — 依赖与虚拟环境管理
 - **[ruff](https://docs.astral.sh/ruff/)** — lint + format（替代 flake8 / black / isort），`select = ["ALL"]` + 逐条说明理由的 ignore
 - **[ty](https://docs.astral.sh/ty/)** — 类型检查（替代 mypy / pyright）
-- **pytest + pytest-asyncio + coverage** — 470 个用例，覆盖率门槛 80%（当前 ~94%）
+- **pytest + pytest-asyncio + coverage** — 487 个用例，覆盖率门槛 80%（当前 ~95%）
 
 所有网络调用都通过 `RunSession` 注入，因此**检查项**测试用
 `tests/fakes.py` 里的 `FakePinger` / `FakeHttp` 就能在毫秒内跑完 8 个检查项，
@@ -264,7 +264,7 @@ CI（`.github/workflows/ci.yml`）在 push / PR 时跑：
 
 | 平台 | 结果 |
 |------|------|
-| Windows 10 IoT 企业版 LTSC 19044（本机，杭电校园网生活区，电信出口） | `ruff` / `ty` 全绿；470 个用例中 469 通过、1 项平台跳过（覆盖率 ~94%）。8 项检查逐项可达：本机在路由器后且开着 Mihomo，`获取基本信息` / `检查代理状态` 按设计给出对隧道网卡的警告，其余 6 项通过 |
+| Windows 10 IoT 企业版 LTSC 19044（本机，杭电校园网生活区，电信出口） | `ruff` / `ty` 全绿；487 个用例中 486 通过、1 项平台跳过（覆盖率 ~95%）。8 项检查逐项可达：本机在路由器后且开着 Mihomo，`获取基本信息` / `检查代理状态` 按设计给出对隧道网卡的警告，其余 6 项通过 |
 | Debian 13 trixie x86_64（Python 3.13 宿主 / venv 3.12） | `ruff` / `ty` 全绿，完整测试套件通过（含离屏 GUI 与 QThread）；非 root 用户下 `SOCK_DGRAM` 非特权 ICMP 正常 |
 
 > macOS 分支（`ping -W <ms> -m <ttl>`）按 `ping(8)` 语义实现，参数拼装（含 BSD 的
@@ -280,7 +280,7 @@ CI（`.github/workflows/ci.yml`）在 push / PR 时跑：
 | `DnsClient` | `dnspython` 异步解析器，可指定 DNS 服务器 |
 | `HttpClient` | `httpx.AsyncClient`（默认不跟随重定向、不保留 Cookie） |
 | MVVM + Avalonia | Typer CLI（主）+ PySide6 可选 GUI |
-| 无测试 | 470 个 pytest 用例 + GitHub Actions CI |
+| 无测试 | 487 个 pytest 用例 + GitHub Actions CI |
 
 实现过程中还修正（或发现）了原版的几处问题：
 

@@ -1,9 +1,9 @@
-"""打包资产的一致性闸门.
+"""打包资产与仓库声明的一致性闸门.
 
 ``packaging/`` 下的东西不在 ruff / ty 的检查范围内（``.spec`` 不是 Python 模块，
 入口脚本也不算包的一部分），可它们一旦写错，代价是"构建到一半才炸"或者
 "构建出一个版本号不对、或者根本没打包元数据的产物而没人发现"。
-所以这里单独立几道闸门。
+README 里那些会过期的数字同理。所以这里单独立几道闸门。
 
 注意：这些用例**不能**导入 PyInstaller —— 它只在 ``build`` 依赖组里，
 只同步了 dev 组的人应该照样能跑完整测试套件（否则又变成"缺依赖 = 静默跳过"）。
@@ -12,11 +12,14 @@
 from __future__ import annotations
 
 import re
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGING = ROOT / "packaging"
+README = ROOT / "README.md"
 
 
 def project_version() -> str:
@@ -92,3 +95,49 @@ def test_entries_delegate_to_package_entry_points() -> None:
 
     assert "from hdu_netdebugger.cli import main" in cli
     assert "from hdu_netdebugger.gui import launch" in gui
+
+
+def collected_test_count() -> int:
+    """跑一次 ``pytest --collect-only`` 拿到真实用例数。
+
+    收集阶段不执行用例体，所以这一次子进程只花一两秒；用 ``sys.executable``
+    而不是 ``pytest`` 命令，保证跑的是当前解释器里那套。
+    """
+    done = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "--no-cov",
+            "-p",
+            "no:cacheprovider",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
+    match = re.search(r"(\d+) tests? collected", done.stdout)
+    assert match is not None, f"没能解析出用例数:\n{done.stdout[-2000:]}"
+    return int(match.group(1))
+
+
+def test_readme_test_count_matches_reality() -> None:
+    """README 里的用例数必须等于实际收集到的数量.
+
+    这个数字已经漂过两次（380 → 470 → 487），所以做成闸门而不是靠"记得改"：
+    凡是 README 里出现的"<数字> [pytest] 用例"都必须一致且正确。
+    """
+    actual = collected_test_count()
+    stated = {
+        int(item)
+        for item in re.findall(
+            r"(\d+)\s*个\s*(?:pytest\s*)?用例", README.read_text(encoding="utf-8")
+        )
+    }
+
+    assert stated, "README 里没找到'<数字> 个用例'的说法（是不是改了措辞？）"
+    assert stated == {actual}, f"README 写的是 {sorted(stated)}，实际收集到 {actual}"
