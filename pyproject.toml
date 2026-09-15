@@ -144,6 +144,11 @@ docstring-code-format = true
 # ---------------------------------------------------------------------------
 [tool.ty.environment]
 python-version = "3.12"
+# 本项目有大量按 sys.platform 分流的代码（winreg / ctypes.WinDLL / msvcrt ...）。
+# 默认情况下 ty 只按"当前运行平台"解析符号，于是同一份代码在 Windows 上通过、
+# 在 Linux 上却报 winreg 无 OpenKey —— 那是假阳性，不是真问题。
+# `all` 让 ty 不预设目标平台，正好匹配"运行时用 sys.platform 守卫"的写法。
+python-platform = "all"
 
 [tool.ty.src]
 include = ["src", "tests"]
