@@ -158,8 +158,15 @@ class TestFiltering:
 
     def test_unknown_filter_errors(self) -> None:
         result = runner.invoke(app, ["run", "--only", "根本不存在的检查项"])
-        assert result.exit_code != 0
+        assert result.exit_code == EXIT_TOOL_ERROR
         assert "没有匹配" in result.output
+
+    def test_unknown_skip_filter_errors(self) -> None:
+        """回归：``--skip`` 写到不存在的名字时曾抛未捕获的 KeyError（traceback + 退出码 1）。"""
+        result = runner.invoke(app, ["run", "--skip", "根本不存在的检查项"])
+        assert result.exit_code == EXIT_TOOL_ERROR
+        assert "没有匹配" in result.output
+        assert "Traceback" not in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +248,33 @@ class TestExitCodes:
         assert result.exit_code == 2
         assert "检查结论" in result.stdout
         assert "检查公网可达性" in result.stdout
+
+
+class TestUsageErrorExitCode:
+    """用法错误必须归到「工具自身错误」(3)。
+
+    click 默认给参数错误分配 ``2``，与「检查有失败」撞码，脚本就没法区分
+    "参数写错了"和"网真的不通"。这里把整条用法错误路径钉住。
+    """
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["run", "--only", "没有这个检查项"],
+            ["run", "--skip", "没有这个检查项"],
+            ["run", "--format", "xml"],
+            ["run", "--json", "--md"],
+            ["run", "--ping-backend", "magic"],
+            ["run", "--dns-server", "not-an-ip"],
+            ["run", "--ping-count", "abc"],
+            ["run", "--timeout", "0"],
+            ["nope"],
+        ],
+    )
+    def test_usage_errors_exit_three(self, argv: list[str]) -> None:
+        result = runner.invoke(app, argv)
+        assert result.exit_code == EXIT_TOOL_ERROR, result.output
+        assert "Traceback" not in result.output
 
 
 # ---------------------------------------------------------------------------

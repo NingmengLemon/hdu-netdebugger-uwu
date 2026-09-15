@@ -10,7 +10,8 @@
     hnd doctor               # 环境自检
     hnd gui                  # 启动 PySide6 图形界面
 
-退出码：``0`` 全部通过 · ``1`` 存在警告 · ``2`` 存在失败 · ``3`` 工具自身错误。
+退出码：``0`` 全部通过 · ``1`` 存在警告 · ``2`` 存在失败 · ``3`` 工具自身错误
+（含参数写错这类用法错误，避免与结果码撞码）。
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
 import typer
+from typer import _click  # Typer 0.27 起把 click 内联为 typer._click，用法错误要按它的类型捕获
 from typer.core import TyperGroup
 
 from hdu_netdebugger import __version__
@@ -35,17 +37,16 @@ from hdu_netdebugger.console import (
 )
 from hdu_netdebugger.constants import HDU_DNS_IP
 from hdu_netdebugger.net.ping import Backend, BackendUnavailable
-from hdu_netdebugger.registry import all_checkers, resolve_names
+from hdu_netdebugger.registry import all_checkers
 from hdu_netdebugger.report import (
     build_json,
     build_markdown,
     exit_code_for,
 )
-from hdu_netdebugger.runner import run_checks
+from hdu_netdebugger.runner import run_checks, select_checkers
 
 if TYPE_CHECKING:
-    # Typer 0.27 起把 click 内联为 typer._click，这里只借用其类型标注
-    from typer import _click
+    from collections.abc import Sequence
 
     from hdu_netdebugger.runner import RunResult
 
@@ -81,6 +82,40 @@ class DefaultRunGroup(TyperGroup):
         elif args[0].startswith("-") and args[0].split("=", 1)[0] not in self.passthrough_options:
             args.insert(0, self.default_command)
         return super().parse_args(ctx, args)
+
+    def main(
+        self,
+        args: Sequence[str] | None = None,
+        prog_name: str | None = None,
+        complete_var: str | None = None,
+        standalone_mode: bool = True,
+        windows_expand_args: bool = True,
+        **extra: object,
+    ) -> object:
+        """把「用法错误」的退出码收敛到 :data:`EXIT_TOOL_ERROR`。
+
+        typer / click 给参数错误分配的是 ``2``，与「检查有失败」撞码 —— 脚本没法
+        区分"我把参数写错了"和"网真的不通"。这里用 ``standalone_mode=False``
+        接管退出处理，把 :class:`~typer._click.exceptions.ClickException`
+        （含 ``UsageError`` / ``BadParameter``）也归到 ``3``，
+        与 README 承诺的退出码约定一致。
+        """
+        try:
+            code = super().main(
+                args,
+                prog_name,
+                complete_var,
+                standalone_mode=False,
+                windows_expand_args=windows_expand_args,
+                **extra,
+            )
+        except _click.exceptions.ClickException as exc:
+            exc.show()
+            code = EXIT_TOOL_ERROR
+        code = code if isinstance(code, int) else 0
+        if standalone_mode:
+            raise SystemExit(code)
+        return code
 
 
 app = typer.Typer(
@@ -202,7 +237,9 @@ def run(
         raise typer.BadParameter(str(exc)) from exc
 
     try:
-        specs = resolve_names(only or []) if only else all_checkers()
+        # 提前解析一次：既拿到"共 N 项"的横幅数字，也让 --only / --skip 写错时
+        # 报一个干净的用法错误，而不是在 run_checks 内部抛未捕获的 KeyError
+        specs = select_checkers(only=only, skip=skip)
     except KeyError as exc:
         raise typer.BadParameter(str(exc).strip("'")) from exc
     if not specs:
