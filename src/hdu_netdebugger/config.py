@@ -15,7 +15,7 @@ from hdu_netdebugger.constants import (
 )
 
 if TYPE_CHECKING:
-    from ipaddress import IPv4Address
+    from ipaddress import IPv4Address, IPv4Network
 
 __all__ = ["RunConfig"]
 
@@ -46,6 +46,11 @@ class RunConfig:
     trust_env_proxy: bool = True
     #: 强制指定认证接口的 host（留空表示按 DNS 结果自动选择）
     auth_host: str | None = None
+    #: 额外当作"校园网"的网段（``--campus-network``，可重复）。
+    #:
+    #: 校园网拓扑会调整，而参考资料都可能过时，所以不在代码里替用户认定新网段：
+    #: 确认过的网段由使用者显式加进来，检查 1 会把它标成"自定义校园网段"。
+    extra_campus_networks: tuple[IPv4Network, ...] = ()
 
     def __post_init__(self) -> None:
         if self.ping_count < 1:

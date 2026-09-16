@@ -20,7 +20,7 @@ import asyncio
 import platform
 import sys
 import time
-from ipaddress import AddressValueError, IPv4Address
+from ipaddress import AddressValueError, IPv4Address, IPv4Network
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
@@ -212,6 +212,17 @@ def run(
         str | None,
         typer.Option("--auth-host", help="强制指定认证接口的 host（默认按 DNS 结果自动选择）。"),
     ] = None,
+    campus_network: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--campus-network",
+            help=(
+                "把该 CIDR 也当作校园网网段（可重复）。"
+                "校园网拓扑会调整而资料都可能过时，确认过的新网段用它加上即可，"
+                "例如 --campus-network 10.151.0.0/16。"
+            ),
+        ),
+    ] = None,
     insecure: Annotated[
         bool,
         typer.Option("--insecure", "-k", help="跳过 TLS 证书校验（校园网自签证书场景）。"),
@@ -234,6 +245,7 @@ def run(
             http_timeout=http_timeout,
             dns_server=dns_server,
             auth_host=auth_host,
+            campus_network=campus_network,
             insecure=insecure,
             no_env_proxy=no_env_proxy,
         )
@@ -310,6 +322,7 @@ def _build_config(
     http_timeout: float,
     dns_server: str | None,
     auth_host: str | None,
+    campus_network: list[str] | None,
     insecure: bool,
     no_env_proxy: bool,
 ) -> RunConfig:
@@ -323,7 +336,26 @@ def _build_config(
         verify_tls=not insecure,
         trust_env_proxy=not no_env_proxy,
         auth_host=auth_host,
+        extra_campus_networks=_parse_networks(campus_network),
     )
+
+
+def _parse_networks(values: list[str] | None) -> tuple[IPv4Network, ...]:
+    """把 ``--campus-network`` 的 CIDR 列表解析成网络对象。
+
+    Raises:
+        ValueError: 只要有一个 CIDR 写错就整体报错 —— 悄悄忽略会让使用者以为
+            "已经加了"，而实际判定没变（静默失败比报错危险）。
+    """
+    if not values:
+        return ()
+    networks: list[IPv4Network] = []
+    for value in values:
+        try:
+            networks.append(IPv4Network(value, strict=False))
+        except ValueError as exc:
+            raise ValueError(f"--campus-network 不是合法的 CIDR: {value}") from exc
+    return tuple(networks)
 
 
 def _emit(

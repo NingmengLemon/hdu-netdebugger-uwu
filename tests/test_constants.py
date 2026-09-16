@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ipaddress import IPv4Address
+from ipaddress import IPv4Address, IPv4Network
 
 import pytest
 
@@ -116,6 +116,20 @@ class TestNetworkRecognition:
 
     def test_eduroam_has_its_own_label(self) -> None:
         assert NetworkKind.EDUROAM.label == "eduroam 漫游网络"
+
+    def test_extra_networks_are_marked_custom(self) -> None:
+        """`--campus-network` 加进来的网段标成"自定义"，而不是冒充内置结论。"""
+        address = IPv4Address("10.151.1.1")
+
+        assert dorm_or_campus(address) is None, "10.151/16 不在内置网段里"
+        assert dorm_or_campus(address, extra=(IPv4Network("10.151.0.0/16"),)) is NetworkKind.CUSTOM
+
+    def test_builtin_networks_win_over_extra(self) -> None:
+        """内置判定优先：追加网段不该把生活区/教学区改判成自定义。"""
+        assert (
+            dorm_or_campus(IPv4Address("10.150.1.1"), extra=(IPv4Network("10.0.0.0/8"),))
+            is NetworkKind.DORM
+        )
 
     @pytest.mark.parametrize(
         ("address", "keyword"),

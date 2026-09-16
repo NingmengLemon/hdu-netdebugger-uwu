@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from ipaddress import IPv4Network
 from typing import TYPE_CHECKING, Any, Self
 
 import pytest
@@ -483,6 +484,58 @@ class TestGetInfoCheck:
         result = await run_check(GetInfoCheck, session)
 
         assert any("DHCP" in item and "PPPoE" in item for item in result.suggestions)
+
+    async def test_extra_campus_network_is_reported_as_custom(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """用户用 `--campus-network` 追加的网段标成"自定义"，并提示可反馈补进默认值。"""
+        sample = InterfaceInfo(
+            name="WLAN",
+            description="Intel",
+            kind=InterfaceKind.ETHERNET,
+            is_up=True,
+            ipv4=("10.151.1.100",),
+        )
+        session = make_session(
+            interfaces=[sample],
+            extra_campus_networks=(IPv4Network("10.151.0.0/16"),),
+        )
+        monkeypatch.setattr(
+            "hdu_netdebugger.checkers.get_info.list_interfaces",
+            lambda: [sample],
+        )
+
+        result = await run_check(GetInfoCheck, session)
+
+        assert result.status is CheckResultStatus.PASS
+        assert result.summary == "检测到自定义校园网段"
+        assert session.context.network_kind is NetworkKind.CUSTOM
+        assert any("--campus-network" in item for item in result.suggestions)
+
+    async def test_extra_campus_network_does_not_leak_into_context(
+        self,
+        session: RunSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """没传追加网段时，10.151.x 仍然是"未检测到校园网地址"。"""
+        monkeypatch.setattr(
+            "hdu_netdebugger.checkers.get_info.list_interfaces",
+            lambda: [
+                InterfaceInfo(
+                    name="WLAN",
+                    description="Intel",
+                    kind=InterfaceKind.ETHERNET,
+                    is_up=True,
+                    ipv4=("10.151.1.100",),
+                )
+            ],
+        )
+
+        result = await run_check(GetInfoCheck, session)
+
+        assert result.summary == "未检测到校园网地址"
+        assert session.context.network_kind is None
 
 
 class TestPingBasedChecks:

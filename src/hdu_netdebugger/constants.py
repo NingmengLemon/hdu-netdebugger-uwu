@@ -12,7 +12,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Iterable, Mapping
 
 __all__ = [
     "ALI_DNS_IP",
@@ -52,6 +52,7 @@ class NetworkKind(StrEnum):
     DORM = "Dorm"
     CAMPUS = "Campus"
     EDUROAM = "Eduroam"
+    CUSTOM = "Custom"
 
     @property
     def label(self) -> str:
@@ -63,6 +64,7 @@ _NETWORK_LABELS: dict[NetworkKind, str] = {
     NetworkKind.DORM: "生活区网络",
     NetworkKind.CAMPUS: "教学区网络",
     NetworkKind.EDUROAM: "eduroam 漫游网络",
+    NetworkKind.CUSTOM: "自定义校园网段",
 }
 
 
@@ -127,8 +129,18 @@ DNS_INTERCEPTION_PROBE_IP: Final = IPv4Address("192.0.2.53")
 DNS_INTERCEPTION_TIMEOUT_S: Final = 1.0
 
 
-def dorm_or_campus(address: IPv4Address) -> NetworkKind | None:
-    """判断地址属于哪个杭电网段（生活区 / 教学区 / eduroam）。
+def dorm_or_campus(
+    address: IPv4Address,
+    *,
+    extra: Iterable[IPv4Network] = (),
+) -> NetworkKind | None:
+    """判断地址属于哪个杭电网段（生活区 / 教学区 / eduroam / 用户追加的网段）。
+
+    Args:
+        address: 待判断的 IPv4 地址。
+        extra: 额外当作"校园网"的网段（来自 ``--campus-network``）。校园网拓扑会调整，
+            而手里的资料都可能过时，所以留了这个口子：确认过的新网段直接加上即可，
+            不必改代码、也不必让工具替用户认定。
 
     Returns:
         对应的 :class:`NetworkKind`；都不匹配时返回 ``None``。
@@ -139,6 +151,8 @@ def dorm_or_campus(address: IPv4Address) -> NetworkKind | None:
         return NetworkKind.CAMPUS
     if address in EDUROAM_NETWORK:
         return NetworkKind.EDUROAM
+    if any(address in network for network in extra):
+        return NetworkKind.CUSTOM
     return None
 
 

@@ -65,10 +65,15 @@ class GetInfoCheck(Checker):
                 self.log_lines(interface.describe())
                 self.log_lines(interface.describe_config())
                 self._check_random_mac(interface)
-                network = interface.network
+                network = interface.classify(self.config.extra_campus_networks)
                 if network is not None:
                     # 与原版一致：后匹配到的接口覆盖前面的结果
                     self.context.network_kind = network
+                    if network is NetworkKind.CUSTOM:
+                        self.log(
+                            f"接口 {interface.name} 落在自定义校园网段"
+                            f"（{[str(item) for item in self.config.extra_campus_networks]}）"
+                        )
             elif interface.kind is InterfaceKind.ETHERNET and not interface.is_up:
                 # 链路没建立的有线网卡也要打出来：群里有过"网线明明插着、系统却说没插"，
                 # 最后靠把协商速率手动降到 100M 才通的案例 —— 那种情况下
@@ -164,6 +169,11 @@ class GetInfoCheck(Checker):
                 self.add_suggestion(
                     "eduroam 是漫游网络，与生活区/教学区的认证体系不同；"
                     "校园网问题请连着 i-HDU 或网线复现"
+                )
+            if network is NetworkKind.CUSTOM:
+                self.add_suggestion(
+                    "该网段是本次通过 --campus-network 指定的（不在工具内置的两段里）；"
+                    "若确认属于校园网，可反馈给 ICU / 维护者补进默认值"
                 )
             return f"检测到{network.label}"
 

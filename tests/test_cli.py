@@ -328,6 +328,41 @@ class TestConfigOptions:
         runner.invoke(app, ["run", "--auth-host", "portal.example.com"])
         assert captured["config"].auth_host == "portal.example.com"
 
+    def test_campus_network_is_repeatable(self, fake_run) -> None:
+        """校园网网段会变，而资料都可能过时 —— 留一个不改代码就能加网段的口子。"""
+        captured = fake_run(PASS_OUTCOMES)
+
+        runner.invoke(
+            app,
+            [
+                "run",
+                "--campus-network",
+                "10.151.0.0/16",
+                "--campus-network",
+                "10.200.0.0/16",
+            ],
+        )
+
+        networks = captured["config"].extra_campus_networks
+        assert [str(item) for item in networks] == ["10.151.0.0/16", "10.200.0.0/16"]
+
+    def test_campus_network_accepts_a_host_address(self, fake_run) -> None:
+        """写成主机地址（`10.151.0.1`）也按网络解释，不该因为"带了主机位"被拒。"""
+        captured = fake_run(PASS_OUTCOMES)
+
+        runner.invoke(app, ["run", "--campus-network", "10.151.0.1"])
+
+        assert [str(item) for item in captured["config"].extra_campus_networks] == ["10.151.0.1/32"]
+
+    def test_invalid_campus_network_rejected(self, fake_run) -> None:
+        """写错就报错，不能悄悄忽略 —— 否则使用者会以为已经加上了。"""
+        fake_run(PASS_OUTCOMES)
+
+        result = runner.invoke(app, ["run", "--campus-network", "10.151.0.0/99"])
+
+        assert result.exit_code == 3
+        assert "campus-network" in result.output
+
     def test_verbose_progress_is_rendered(self, fake_run) -> None:
         fake_run(WARN_OUTCOMES)
         result = runner.invoke(app, ["run", "-v"])

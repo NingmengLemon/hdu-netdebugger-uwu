@@ -5,8 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 from ipaddress import IPv4Address
+from typing import TYPE_CHECKING
 
 from hdu_netdebugger.constants import NetworkKind, dorm_or_campus
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from ipaddress import IPv4Network
 
 __all__ = ["InterfaceInfo", "InterfaceKind"]
 
@@ -101,9 +106,16 @@ class InterfaceInfo:
 
     @property
     def network(self) -> NetworkKind | None:
-        """该接口所属的杭电网络区域；不在校园网网段时返回 ``None``。"""
+        """该接口所属的杭电网络区域（不含用户追加的网段，见 :meth:`classify`）。"""
+        return dorm_or_campus(self.ipv4_addresses[0]) if self.ipv4_addresses else None
+
+    def classify(self, extra: Iterable[IPv4Network] = ()) -> NetworkKind | None:
+        """判断该接口属于哪个网段，可带上用户追加的"也算校园网"的网段。
+
+        逐地址判断（一个接口可能同时有多个 IPv4），只要有一个落进已知网段就返回它。
+        """
         for address in self.ipv4_addresses:
-            kind = dorm_or_campus(address)
+            kind = dorm_or_campus(address, extra=extra)
             if kind is not None:
                 return kind
         return None
