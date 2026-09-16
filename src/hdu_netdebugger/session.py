@@ -16,13 +16,14 @@ from hdu_netdebugger.context import CheckContext
 from hdu_netdebugger.net.http import HttpClient
 from hdu_netdebugger.net.interfaces import list_interfaces
 from hdu_netdebugger.net.ping import Backend, PingOptions, ping_multiple
-from hdu_netdebugger.net.routes import Egress, RouteInfo, route_for
+from hdu_netdebugger.net.routes import Egress, RouteInfo, default_routes, route_for
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
 
     from hdu_netdebugger.models.interface import InterfaceInfo
     from hdu_netdebugger.models.ping import MultiPingResult
+    from hdu_netdebugger.net.routes import DefaultRoute
 
     #: Ping 实现的签名：``(目标, 参数, *, backend) -> 汇总结果``。
     #:
@@ -31,6 +32,8 @@ if TYPE_CHECKING:
     Pinger = Callable[..., Awaitable[MultiPingResult]]
     #: 路由查询的签名：``(目标) -> RouteInfo | None``
     Router = Callable[..., "RouteInfo | None"]
+    #: 默认路由列表的签名：``() -> Sequence[DefaultRoute]``
+    RouteLister = Callable[..., "Sequence[DefaultRoute]"]
 
 __all__ = ["RunSession"]
 
@@ -43,6 +46,7 @@ class RunSession:
         "_http_owned",
         "_interfaces",
         "_pinger",
+        "_route_lister",
         "_router",
         "config",
         "context",
@@ -61,6 +65,7 @@ class RunSession:
         pinger: Pinger | None = None,
         router: Router | None = None,
         interfaces: Sequence[InterfaceInfo] | None = None,
+        route_lister: RouteLister | None = None,
     ) -> None:
         self.config = config or RunConfig()
         self.context = context or CheckContext()
@@ -71,6 +76,7 @@ class RunSession:
         self._http_owned = http is None
         self._pinger = pinger or ping_multiple
         self._router = router or route_for
+        self._route_lister = route_lister or default_routes
         #: 接口快照：``None`` 表示"还没枚举过"；测试可以直接注入样本
         self._interfaces: list[InterfaceInfo] | None = (
             None if interfaces is None else list(interfaces)
@@ -122,6 +128,17 @@ class RunSession:
         return Egress(
             target=text, route=route, interface=self._interface_for(route.interface_index)
         )
+
+    def default_routes(self) -> tuple[DefaultRoute, ...]:
+        """本机全部 IPv4 默认路由（空元组表示平台不支持或查询失败）。
+
+        与 :meth:`egress` 同样的降级原则：拿不到就返回空，让调用方少打一段日志，
+        而不是把检查项弄崩。
+        """
+        try:
+            return tuple(self._route_lister())
+        except Exception:  # 归属/路由信息是附属证据，不能因此中断检查
+            return ()
 
     def interfaces(self) -> list[InterfaceInfo]:
         """本机接口快照（惰性枚举一次并缓存）。

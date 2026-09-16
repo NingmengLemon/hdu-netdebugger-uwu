@@ -94,6 +94,28 @@ class GetInfoCheck(Checker):
         self.log_lines(interface.describe())
         self.context.has_tunnel_interface = True
 
+    def _log_default_routes(self) -> None:
+        """列出全部 IPv4 默认路由。
+
+        多条 ``0.0.0.0/0`` 同时存在（物理网卡 / 无线 / 隧道各一条）是"网线插着却从
+        隧道出去"的直接原因，只报最优那条看不出这个竞争关系。
+
+        ``DefaultRoute.metric`` 是**路由 metric**（Windows 转发表里的值，常常都是 0），
+        真正排序用的是"接口 metric + 路由 metric"，所以这里如实标注字段含义，
+        实际生效的那条由下面的"探测出站归属"给出。
+        """
+        routes = self.session.default_routes()
+        if not routes:
+            return
+        names = {interface.index: interface.name for interface in self.session.interfaces()}
+        self.log(f"IPv4 默认路由（共 {len(routes)} 条，Metric 为路由 metric）:")
+        for route in routes:
+            label = names.get(route.interface_index, "(未知接口)")
+            self.log(
+                f"- {label} (ifIndex {route.interface_index}) "
+                f"下一跳 {route.next_hop or '(无)'} 路由 metric {route.metric}"
+            )
+
     def _check_random_mac(self, interface: InterfaceInfo) -> None:
         """MAC 被随机化会让"无感知认证"失效（杭电按 MAC 绑定）。
 
@@ -110,6 +132,7 @@ class GetInfoCheck(Checker):
 
     def _report_egress(self) -> None:
         """记录探测流量实际从哪个接口出去，并在被隧道接管时明确警告。"""
+        self._log_default_routes()
         self.log("探测出站归属:")
         egresses = [(label, self.session.egress(target)) for label, target in _PROBE_TARGETS]
         for label, egress in egresses:

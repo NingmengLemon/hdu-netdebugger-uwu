@@ -38,7 +38,7 @@ from hdu_netdebugger.models.enums import CheckResultStatus
 from hdu_netdebugger.models.interface import InterfaceInfo, InterfaceKind
 from hdu_netdebugger.net.dns import DnsResult
 from hdu_netdebugger.net.ping import Backend
-from hdu_netdebugger.net.routes import RouteInfo
+from hdu_netdebugger.net.routes import DefaultRoute, RouteInfo
 from tests.fakes import FakeHttp, FakePinger, FakeRouter, make_session, srun_jsonp
 
 if TYPE_CHECKING:
@@ -159,6 +159,62 @@ class TestGetInfoCheck:
         assert "DHCP: 已启用" in details
         assert "默认网关: 10.150.0.1" in details
         assert "DNS 服务器: 210.32.32.1" in details
+
+    async def test_logs_the_default_route_table(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """多条默认路由同时存在，是"网线插着却从隧道出去"的直接原因。"""
+        sample = InterfaceInfo(
+            name="以太网",
+            description="Realtek",
+            kind=InterfaceKind.ETHERNET,
+            is_up=True,
+            ipv4=("10.150.0.100",),
+            index=15,
+        )
+        session = make_session(
+            interfaces=[sample],
+            routes=[
+                DefaultRoute(interface_index=15, next_hop="10.150.0.1", metric=0),
+                DefaultRoute(interface_index=75, next_hop="198.18.0.2", metric=0),
+            ],
+        )
+        monkeypatch.setattr(
+            "hdu_netdebugger.checkers.get_info.list_interfaces",
+            lambda: [sample],
+        )
+
+        result = await run_check(GetInfoCheck, session)
+
+        details = result.details or ""
+        assert "IPv4 默认路由（共 2 条" in details
+        assert "以太网 (ifIndex 15) 下一跳 10.150.0.1" in details
+        assert "ifIndex 75" in details
+
+    async def test_omits_the_route_table_when_unavailable(
+        self,
+        session: RunSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """拿不到路由表时静默跳过，不打印一个空标题。"""
+        monkeypatch.setattr(
+            "hdu_netdebugger.checkers.get_info.list_interfaces",
+            lambda: [
+                InterfaceInfo(
+                    name="以太网",
+                    description="Realtek",
+                    kind=InterfaceKind.ETHERNET,
+                    is_up=True,
+                    ipv4=("10.150.0.100",),
+                    index=15,
+                )
+            ],
+        )
+
+        result = await run_check(GetInfoCheck, session)
+
+        assert "IPv4 默认路由" not in (result.details or "")
 
     async def test_warns_when_probes_egress_through_a_tunnel(
         self,

@@ -45,9 +45,10 @@ $ hnd
 
 - **探测出站归属**：本工具的 ping 到底从哪张网卡出去。装了代理 / VPN 的机器上，
   TUN 会以更低的 metric 抢走默认路由，于是所有探测都从隧道出去 —— 那时"BAS 可达"
-  并不代表校园物理链路可达。检查 1 会逐目标列出出口接口 / 下一跳 / metric，
-  并在被隧道接管时明确警告。实测本机：校园 BAS、深澜、阿里 DNS 的出口全是
-  `Mihomo（ifIndex 75，metric 0）`，只有局域网网关走物理网卡。
+  并不代表校园物理链路可达。检查 1 会列出**全部 IPv4 默认路由**（多条 `0.0.0.0/0`
+  同时存在正是这种竞争的直接证据），再逐目标给出实际出口接口 / 下一跳 / metric，
+  并在被隧道接管时明确警告。实测本机：三条默认路由（以太网 / WLAN / Mihomo），
+  而校园 BAS、深澜、阿里 DNS 的出口全是 `Mihomo（ifIndex 75，metric 0）`。
 - **IP 配置证据**：每个接口的 DHCP 状态、默认网关、系统配置的 DNS、系统接口索引与 MTU。
   排查校园网的第一步通常就是"这台机器到底拿到 IP 没有、网关和 DNS 是不是校园的"。
 - **系统解析器对比**：除了问校园 DNS，还用系统配置的解析器解析同一个域名。
@@ -279,7 +280,7 @@ uv run pytest
 - **[uv](https://docs.astral.sh/uv/)** — 依赖与虚拟环境管理
 - **[ruff](https://docs.astral.sh/ruff/)** — lint + format（替代 flake8 / black / isort），`select = ["ALL"]` + 逐条说明理由的 ignore
 - **[ty](https://docs.astral.sh/ty/)** — 类型检查（替代 mypy / pyright）
-- **pytest + pytest-asyncio + coverage** — 584 个用例，覆盖率门槛 80%（当前 ~95%）
+- **pytest + pytest-asyncio + coverage** — 594 个用例，覆盖率门槛 80%（当前 ~95%）
 
 所有网络调用都通过 `RunSession` 注入，因此**检查项**测试用
 `tests/fakes.py` 里的 `FakePinger` / `FakeHttp` 就能在毫秒内跑完 8 个检查项，
@@ -313,7 +314,7 @@ CI（`.github/workflows/ci.yml`）在 push / PR 时跑：
 
 | 平台 | 结果 |
 |------|------|
-| Windows 10 IoT 企业版 LTSC 19044（本机，杭电校园网生活区，电信出口） | `ruff` / `ty` 全绿；584 个用例中 583 通过、1 项平台跳过（覆盖率 ~95%）。8 项检查逐项可达：本机在路由器后且开着 Mihomo，`获取基本信息` / `检查代理状态` 按设计给出对隧道网卡的警告，其余 6 项通过 |
+| Windows 10 IoT 企业版 LTSC 19044（本机，杭电校园网生活区，电信出口） | `ruff` / `ty` 全绿；594 个用例中 593 通过、1 项平台跳过（覆盖率 ~95%）。8 项检查逐项可达：本机在路由器后且开着 Mihomo，`获取基本信息` / `检查代理状态` 按设计给出对隧道网卡的警告，其余 6 项通过 |
 | Debian 13 trixie x86_64（Python 3.13 宿主 / venv 3.12） | `ruff` / `ty` 全绿，完整测试套件通过（含离屏 GUI 与 QThread）；非 root 用户下 `SOCK_DGRAM` 非特权 ICMP 正常 |
 
 > macOS 分支（`ping -W <ms> -m <ttl>`）按 `ping(8)` 语义实现，参数拼装（含 BSD 的
@@ -329,7 +330,7 @@ CI（`.github/workflows/ci.yml`）在 push / PR 时跑：
 | `DnsClient` | `dnspython` 异步解析器，可指定 DNS 服务器 |
 | `HttpClient` | `httpx.AsyncClient`（默认不跟随重定向、不保留 Cookie） |
 | MVVM + Avalonia | Typer CLI（主）+ PySide6 可选 GUI |
-| 无测试 | 584 个 pytest 用例 + GitHub Actions CI |
+| 无测试 | 594 个 pytest 用例 + GitHub Actions CI |
 
 实现过程中还修正（或发现）了原版的几处问题：
 

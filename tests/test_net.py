@@ -38,7 +38,7 @@ from hdu_netdebugger.net.ping import (
     reset_backend_cache,
     resolve_target,
 )
-from hdu_netdebugger.net.routes import RouteInfo
+from hdu_netdebugger.net.routes import DefaultRoute, RouteInfo
 from hdu_netdebugger.net.winaddr import network_order_ipaddr
 from hdu_netdebugger.session import RunSession
 from tests.fakes import FakeHttp, FakeRouter
@@ -1266,6 +1266,20 @@ class TestRunSession:
         session = RunSession(router=boom)
 
         assert session.egress("10.150.0.1").describe() == "出站: (未知)"
+
+    def test_default_routes_are_injected(self) -> None:
+        route = DefaultRoute(interface_index=75, next_hop="198.18.0.2", metric=0)
+        session = RunSession(route_lister=lambda: (route,))
+
+        assert session.default_routes() == (route,)
+
+    def test_default_routes_degrade_on_error(self) -> None:
+        def boom() -> tuple[DefaultRoute, ...]:
+            raise OSError("读不到路由表")
+
+        session = RunSession(route_lister=boom)
+
+        assert session.default_routes() == ()
 
 
 class TestRunConfig:

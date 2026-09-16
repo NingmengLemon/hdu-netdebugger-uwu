@@ -32,7 +32,7 @@ from pathlib import Path
 from hdu_netdebugger.net.interfaces import InterfaceInfo, SockaddrIn, SockaddrIn6
 from hdu_netdebugger.net.winaddr import network_order_ipaddr
 
-__all__ = ["Egress", "RouteInfo", "describe_route", "route_for"]
+__all__ = ["DefaultRoute", "Egress", "RouteInfo", "default_routes", "describe_route", "route_for"]
 
 _AF_INET = 2
 _AF_INET6 = 23
@@ -69,6 +69,31 @@ class Egress:
         """渲染成一行说明，供检查项的详细日志使用。"""
         label = self.interface.name if self.interface is not None else None
         return describe_route(self.route, interface_label=label)
+
+
+@dataclass(frozen=True, slots=True)
+class DefaultRoute:
+    """一条 IPv4 默认路由（``0.0.0.0/0``）。"""
+
+    interface_index: int | None = None
+    next_hop: str | None = None
+    metric: int | None = None
+
+
+def default_routes() -> tuple[DefaultRoute, ...]:
+    """列出本机**全部** IPv4 默认路由，按 metric 升序。
+
+    为什么需要"全部"而不只是最优的那条：校园网里挂代理 / VPN 的机器常常同时存在
+    多条 ``0.0.0.0/0``，由 metric 决定谁生效 —— 本机实测同时有 Mihomo（metric 0）、
+    以太网（25）与 WLAN（45）三条。只看"最优那条"看不出这个竞争关系，
+    而它正是"网线插着却从隧道出去"的原因。
+
+    非 Windows 平台返回空元组（Linux 上 `/proc/net/route` 只能给出最优的一条，
+    见 :func:`_linux_default_route`；宁缺勿猜）。
+    """
+    if sys.platform != "win32":
+        return ()
+    return _windows_default_routes()
 
 
 def route_for(target: str | IPv4Address) -> RouteInfo | None:
@@ -193,6 +218,59 @@ class MibIpForwardRow(ctypes.Structure):
         ("dwForwardMetric3", ctypes.c_uint32),
         ("dwForwardMetric4", ctypes.c_uint32),
         ("dwForwardMetric5", ctypes.c_uint32),
+    )
+
+
+class MibIpForwardTable2(ctypes.Structure):
+    """``MIB_IPFORWARD_TABLE2``：``NumEntries`` + 内联变长行数组。
+
+    数组只声明 1 个元素，实际按 ``NumEntries`` 重新映射（见 :func:`_windows_default_routes`）。
+    """
+
+    _fields_ = (
+        ("NumEntries", ctypes.c_uint32),
+        ("Table", MibIpForwardRow2 * 1),
+    )
+
+
+def _windows_default_routes() -> tuple[DefaultRoute, ...]:
+    """``GetIpForwardTable2``：把所有 IPv4 默认路由列出来，按 metric 升序。"""
+    iphlpapi = ctypes.WinDLL("iphlpapi.dll", use_last_error=True)
+    iphlpapi.GetIpForwardTable2.restype = ctypes.c_uint32
+    iphlpapi.GetIpForwardTable2.argtypes = (
+        ctypes.c_uint16,  # Family
+        ctypes.POINTER(ctypes.POINTER(MibIpForwardTable2)),  # Table
+    )
+    iphlpapi.FreeMibTable.restype = None
+    iphlpapi.FreeMibTable.argtypes = (ctypes.c_void_p,)
+
+    table = ctypes.POINTER(MibIpForwardTable2)()
+    if iphlpapi.GetIpForwardTable2(_AF_INET, ctypes.byref(table)) != 0:
+        return ()
+
+    try:
+        count = int(table.contents.NumEntries)
+        if count <= 0:
+            return ()
+        rows_type = MibIpForwardRow2 * count
+        offset = MibIpForwardTable2.Table.offset
+        rows = rows_type.from_address(ctypes.addressof(table.contents) + offset)
+        routes = [route for row in rows if (route := _default_route_from_row(row)) is not None]
+    finally:
+        iphlpapi.FreeMibTable(table)
+
+    return tuple(sorted(routes, key=lambda item: (item.metric or 0, item.interface_index or 0)))
+
+
+def _default_route_from_row(row: MibIpForwardRow2) -> DefaultRoute | None:
+    """把一行路由过滤成默认路由（``0.0.0.0/0``），其它前缀返回 ``None``。"""
+    prefix = row.DestinationPrefix
+    if prefix.Prefix.si_family != _AF_INET or int(prefix.PrefixLength) != 0:
+        return None
+    return DefaultRoute(
+        interface_index=int(row.InterfaceIndex) or None,
+        next_hop=_sockaddr_inet_text(row.NextHop),
+        metric=int(row.Metric),
     )
 
 

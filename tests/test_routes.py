@@ -17,7 +17,13 @@ import pytest
 
 from hdu_netdebugger.models.interface import InterfaceInfo, InterfaceKind
 from hdu_netdebugger.net import routes as routes_module
-from hdu_netdebugger.net.routes import Egress, RouteInfo, describe_route, route_for
+from hdu_netdebugger.net.routes import (
+    Egress,
+    RouteInfo,
+    default_routes,
+    describe_route,
+    route_for,
+)
 from hdu_netdebugger.net.winaddr import network_order_ipaddr, text_from_network_order
 
 FAKE_PROC_ROUTE = (
@@ -183,6 +189,70 @@ class TestWindowsRouteIntegration:
 
     def test_public_address_has_a_route(self) -> None:
         assert route_for("223.5.5.5") is not None
+
+
+def _row(
+    *,
+    family: int = 2,
+    prefix_length: int = 0,
+    index: int = 15,
+    next_hop: str | None = "10.150.0.1",
+    metric: int = 25,
+) -> routes_module.MibIpForwardRow2:
+    """造一行 ``MIB_IPFORWARD_ROW2``（用真结构体，偏移与实现保持一致）。"""
+    row = routes_module.MibIpForwardRow2()
+    row.InterfaceIndex = index
+    row.Metric = metric
+    row.DestinationPrefix.PrefixLength = prefix_length
+    row.DestinationPrefix.Prefix.si_family = family
+    if next_hop is not None:
+        row.NextHop.Ipv4 = routes_module.SockaddrIn(
+            sin_family=2,
+            sin_port=0,
+            sin_addr=(routes_module.ctypes.c_uint8 * 4)(*IPv4Address(next_hop).packed),
+            sin_zero=(routes_module.ctypes.c_uint8 * 8)(),
+        )
+    return row
+
+
+class TestDefaultRouteRow:
+    """``0.0.0.0/0`` 才算法默认路由，其余前缀要滤掉。"""
+
+    def test_accepts_a_default_route(self) -> None:
+        route = routes_module._default_route_from_row(_row())
+
+        assert route == routes_module.DefaultRoute(
+            interface_index=15,
+            next_hop="10.150.0.1",
+            metric=25,
+        )
+
+    def test_rejects_a_non_zero_prefix(self) -> None:
+        assert routes_module._default_route_from_row(_row(prefix_length=8)) is None
+
+    def test_rejects_ipv6(self) -> None:
+        assert routes_module._default_route_from_row(_row(family=23)) is None
+
+    def test_missing_next_hop_is_allowed(self) -> None:
+        """on-link 默认路由的下一跳是 0.0.0.0，不该因此丢掉这一行。"""
+        route = routes_module._default_route_from_row(_row(next_hop=None))
+
+        assert route is not None
+        assert route.next_hop is None
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="默认路由表只在 Windows 上实现")
+class TestDefaultRoutesIntegration:
+    def test_lists_at_least_one_default_route(self) -> None:
+        routes = default_routes()
+
+        assert routes, "本机至少应有一条默认路由"
+        assert all(route.interface_index is not None for route in routes)
+        assert all(route.metric is not None for route in routes)
+
+    def test_sorted_by_route_metric(self) -> None:
+        metrics = [route.metric or 0 for route in default_routes()]
+        assert metrics == sorted(metrics)
 
 
 class TestSockaddrInetText:
