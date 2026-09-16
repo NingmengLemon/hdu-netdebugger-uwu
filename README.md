@@ -66,6 +66,12 @@ $ hnd
 - **认证接口的明文回退**：校园认证接口同时监听 80（官方给出的认证地址就是明文
   `http://192.168.112.97`），因此 TLS / 代理把 HTTPS 弄坏时改走明文仍能读出认证状态；
   另外还会记录门户首页跳向哪个页面（未认证跳登录页、已认证跳管理页）。
+- **深澜响应里的会话与配额**：在线时长、最近一次保活、本次与累计流量、余量、拨号方式、
+  认证服务端版本，以及"在线设备地址是否就在本机网卡上"（判断认证的是本机，还是路由器 /
+  NAT 后面的另一台设备）。这些字段解析器一直在解析（对应原版的 `SrunAuthResponse`）
+  却没人看，而"认证正常但上不了网"里它们往往正是关键。
+  **身份字段（`user_name` / `user_mac` / `phone` / `email` / `real_name`）一律不打印**，
+  并有单测守着这条边界。
 
 ## 安装
 
@@ -273,7 +279,7 @@ uv run pytest
 - **[uv](https://docs.astral.sh/uv/)** — 依赖与虚拟环境管理
 - **[ruff](https://docs.astral.sh/ruff/)** — lint + format（替代 flake8 / black / isort），`select = ["ALL"]` + 逐条说明理由的 ignore
 - **[ty](https://docs.astral.sh/ty/)** — 类型检查（替代 mypy / pyright）
-- **pytest + pytest-asyncio + coverage** — 580 个用例，覆盖率门槛 80%（当前 ~95%）
+- **pytest + pytest-asyncio + coverage** — 584 个用例，覆盖率门槛 80%（当前 ~95%）
 
 所有网络调用都通过 `RunSession` 注入，因此**检查项**测试用
 `tests/fakes.py` 里的 `FakePinger` / `FakeHttp` 就能在毫秒内跑完 8 个检查项，
@@ -307,7 +313,7 @@ CI（`.github/workflows/ci.yml`）在 push / PR 时跑：
 
 | 平台 | 结果 |
 |------|------|
-| Windows 10 IoT 企业版 LTSC 19044（本机，杭电校园网生活区，电信出口） | `ruff` / `ty` 全绿；580 个用例中 579 通过、1 项平台跳过（覆盖率 ~95%）。8 项检查逐项可达：本机在路由器后且开着 Mihomo，`获取基本信息` / `检查代理状态` 按设计给出对隧道网卡的警告，其余 6 项通过 |
+| Windows 10 IoT 企业版 LTSC 19044（本机，杭电校园网生活区，电信出口） | `ruff` / `ty` 全绿；584 个用例中 583 通过、1 项平台跳过（覆盖率 ~95%）。8 项检查逐项可达：本机在路由器后且开着 Mihomo，`获取基本信息` / `检查代理状态` 按设计给出对隧道网卡的警告，其余 6 项通过 |
 | Debian 13 trixie x86_64（Python 3.13 宿主 / venv 3.12） | `ruff` / `ty` 全绿，完整测试套件通过（含离屏 GUI 与 QThread）；非 root 用户下 `SOCK_DGRAM` 非特权 ICMP 正常 |
 
 > macOS 分支（`ping -W <ms> -m <ttl>`）按 `ping(8)` 语义实现，参数拼装（含 BSD 的
@@ -323,7 +329,7 @@ CI（`.github/workflows/ci.yml`）在 push / PR 时跑：
 | `DnsClient` | `dnspython` 异步解析器，可指定 DNS 服务器 |
 | `HttpClient` | `httpx.AsyncClient`（默认不跟随重定向、不保留 Cookie） |
 | MVVM + Avalonia | Typer CLI（主）+ PySide6 可选 GUI |
-| 无测试 | 580 个 pytest 用例 + GitHub Actions CI |
+| 无测试 | 584 个 pytest 用例 + GitHub Actions CI |
 
 实现过程中还修正（或发现）了原版的几处问题：
 

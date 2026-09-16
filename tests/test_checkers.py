@@ -883,6 +883,100 @@ class TestAuthCheck:
         assert "门户首页" in (result.details or "")
         assert "/index_1.html" in (result.details or "")
 
+    async def test_logs_session_and_quota_facts(
+        self,
+        session: RunSession,
+        fake_http: FakeHttp,
+        srun_ok_text: str,
+        ok_url: str,
+    ) -> None:
+        """会话时长 / 余量 / 拨号方式 / 服务端版本都是白拿的诊断字段。"""
+        session.context.dns_available = True
+        fake_http.add(ok_url, text=srun_ok_text)
+
+        result = await run_check(AuthCheck, session)
+
+        details = result.details or ""
+        assert "会话与配额" in details
+        assert "本次在线时长" in details
+        assert "余量" in details
+        assert "认证服务端版本" in details
+
+    async def test_never_prints_identity_fields(
+        self,
+        session: RunSession,
+        fake_http: FakeHttp,
+        ok_url: str,
+    ) -> None:
+        """身份字段一律不打印（个人信息，且对诊断没有增量价值）。"""
+        session.context.dns_available = True
+        fake_http.add(
+            ok_url,
+            text=srun_jsonp(
+                {
+                    "error": "ok",
+                    "products_id": "4",
+                    "user_name": "SENSITIVE-ACCOUNT",
+                    "user_mac": "SENSITIVE-MAC",
+                    "phone": "SENSITIVE-PHONE",
+                    "email": "SENSITIVE-EMAIL",
+                    "real_name": "SENSITIVE-NAME",
+                }
+            ),
+        )
+
+        result = await run_check(AuthCheck, session)
+
+        details = result.details or ""
+        for secret in (
+            "SENSITIVE-ACCOUNT",
+            "SENSITIVE-MAC",
+            "SENSITIVE-PHONE",
+            "SENSITIVE-EMAIL",
+            "SENSITIVE-NAME",
+        ):
+            assert secret not in details
+
+    async def test_logs_device_addresses_versus_local_addresses(
+        self,
+        ok_url: str,
+        srun_ok_text: str,
+    ) -> None:
+        """在线设备地址与本机地址对照：认证的是本机还是路由器后面别的设备。"""
+        http = FakeHttp()
+        http.add(ok_url, text=srun_ok_text)
+        session = make_session(
+            http=http,
+            interfaces=[
+                InterfaceInfo(
+                    name="以太网",
+                    description="Realtek",
+                    kind=InterfaceKind.ETHERNET,
+                    is_up=True,
+                    ipv4=("10.150.0.100",),
+                )
+            ],
+        )
+        session.context.dns_available = True
+
+        result = await run_check(AuthCheck, session)
+
+        assert "在线设备里包含本机地址: 10.150.0.100" in (result.details or "")
+
+    async def test_logs_when_no_device_address_is_local(
+        self,
+        session: RunSession,
+        fake_http: FakeHttp,
+        srun_ok_text: str,
+        ok_url: str,
+    ) -> None:
+        session.context.dns_available = True
+        fake_http.add(ok_url, text=srun_ok_text)
+
+        result = await run_check(AuthCheck, session)
+
+        assert "都不在本机网卡上" in (result.details or "")
+
     async def test_logs_online_devices(
         self,
         session: RunSession,

@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
 
 from hdu_netdebugger.checkers.base import Checker
@@ -136,3 +137,87 @@ class AuthCheck(Checker):
             self.log(f"- 设备IPv6: {device.ip6}")
             self.log(f"- 设备系统: {device.os_name}")
             self.log()
+        self._log_session_facts(payload)
+
+    def _log_session_facts(self, payload: SrunAuthResponse) -> None:
+        """会话时长、余量、拨号方式等"白拿"的诊断字段。
+
+        这些字段解析器一直都在解析（对应原版的 ``SrunAuthResponse``），只是没人看。
+        依据（钉钉群 334 条日志）："认证正常但上不了网"这一类里，配额 / 欠费 / 掉线
+        以及"是不是路由器或别的设备在认证"是最常见的两种原因。
+
+        **只打印非身份字段**：``user_name`` / ``user_mac`` / ``phone`` / ``email`` /
+        ``real_name`` 一律不打印 —— 它们是个人信息，对诊断也没有增量价值。
+        """
+        self.log("会话与配额:")
+        self.log(f"- 本次在线时长: {_elapsed_text(payload.add_time)}（服务端 add_time）")
+        self.log(
+            f"- 最近一次保活: {_elapsed_text(payload.keepalive_time)}前（服务端 keepalive_time）"
+        )
+        self.log(
+            f"- 本次流量: 上行 {_megabytes(payload.bytes_out)} / 下行 {_megabytes(payload.bytes_in)}"
+        )
+        self.log(f"- 累计流量: {_megabytes(payload.sum_bytes)}")
+        self.log(
+            f"- 余量: {_megabytes(payload.remain_bytes)} / "
+            f"{_duration_text(payload.remain_seconds)}"
+            "（0 可能表示不限量，也可能表示已用尽，需向运营商确认）"
+        )
+        self.log(f"- 拨号方式: pppoe_dial={payload.pppoe_dial or '(未给出)'}")
+        self.log(f"- 认证服务端版本: {payload.sysver or '(未给出)'}")
+        self._log_device_vs_local(payload)
+
+    def _log_device_vs_local(self, payload: SrunAuthResponse) -> None:
+        """把在线设备地址与本机地址对照：认证的到底是本机还是路由器后面的别的设备。"""
+        local = {
+            address
+            for interface in self.session.interfaces()
+            for address in interface.ipv4
+            if not address.startswith("169.254.")
+        }
+        device_ips = {device.ip for device in payload.active_devices.values() if device.ip}
+        if not device_ips:
+            return
+
+        matched = sorted(device_ips & local)
+        if matched:
+            self.log(f"- 在线设备里包含本机地址: {', '.join(matched)}")
+            return
+        self.log(
+            f"- 在线设备地址（{', '.join(sorted(device_ips))}）都不在本机网卡上："
+            "本机可能位于路由器 / NAT 之后，或认证的是另一台设备"
+        )
+
+
+def _elapsed_text(stamp: int) -> str:
+    """把服务端时间戳渲染成"距今多久"的时长（不含"前"字，措辞交给调用方）。"""
+    if not stamp:
+        return "(未给出)"
+    seconds = int(time.time()) - stamp
+    if seconds < 0 or seconds > 90 * 86400:
+        # 与本机时钟差得离谱时不要硬算，直接给出原始值
+        return f"(服务端时间戳 {stamp}，与本机时钟对不上)"
+    return _duration_text(seconds)
+
+
+def _duration_text(seconds: int) -> str:
+    """把秒数渲染成中文时长。"""
+    if seconds <= 0:
+        return "0 秒"
+    days, remainder = divmod(int(seconds), 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes = remainder // 60
+    if days:
+        return f"{days} 天 {hours} 小时"
+    if hours:
+        return f"{hours} 小时 {minutes} 分"
+    return f"{minutes} 分"
+
+
+def _megabytes(value: int) -> str:
+    """把字节数渲染成 MB / GB。"""
+    if value <= 0:
+        return "0 字节"
+    if value >= 1024**3:
+        return f"{value / 1024**3:.1f} GB"
+    return f"{value / 1024**2:.1f} MB"
