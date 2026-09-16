@@ -174,11 +174,19 @@ jobs:
       - name: 冻结产物冒烟（CLI 版本/list/doctor + 离屏 GUI 截图）
         run: uv run python scripts/dist_smoke.py
 
+      # CLI 是 onefile：Windows 下产物叫 dist/hnd.exe，类 Unix 下叫 dist/hnd。
+      # 归一到一个目录里，上传路径就不必写平台分支。
+      - name: 归一化 CLI 产物路径
+        shell: bash
+        run: |
+          mkdir -p dist/cli
+          mv dist/hnd dist/cli/ 2>/dev/null || mv dist/hnd.exe dist/cli/
+
       - name: 上传可执行文件
         uses: actions/upload-artifact@v4
         with:
           name: hnd-exe-${{ runner.os }}
           path: |
-            dist/hnd
+            dist/cli
             dist/HDU-NetDebugger
           if-no-files-found: error

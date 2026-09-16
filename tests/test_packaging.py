@@ -70,8 +70,8 @@ def test_spec_entries_exist_and_metadata_is_collected() -> None:
     """spec 引用的入口脚本要真的存在；且必须收集 dist-info。"""
     text = (PACKAGING / "hnd.spec").read_text(encoding="utf-8")
 
-    entries = re.findall(r'bundle\("([^"]+)"', text)
-    assert entries, "没解析到任何 bundle() 调用"
+    entries = re.findall(r'bundle_(?:onefile|onedir)\("([^"]+)"', text)
+    assert entries, "没解析到任何 bundle_*() 调用"
     for entry in entries:
         assert (ROOT / entry).is_file(), f"spec 引用的入口不存在: {entry}"
 
@@ -80,11 +80,12 @@ def test_spec_entries_exist_and_metadata_is_collected() -> None:
 
 
 def test_spec_builds_console_and_windowed_variants() -> None:
-    """CLI 要控制台、GUI 不要控制台；CLI 必须排除 Qt 才谈得上"又小又快"。"""
+    """形态与子系统都要对：CLI 单文件 + 控制台 + 排除 Qt；GUI 目录式 + 窗口。"""
     text = (PACKAGING / "hnd.spec").read_text(encoding="utf-8")
 
-    assert 'bundle("packaging/entry_cli.py", "hnd", console=True' in text
-    assert 'bundle("packaging/entry_gui.py", "HDU-NetDebugger", console=False' in text
+    # CLI 用 onefile（"发一个文件就能用"），GUI 用 onedir（121MB 每次解压不值）
+    assert 'bundle_onefile("packaging/entry_cli.py", "hnd", console=True' in text
+    assert 'bundle_onedir("packaging/entry_gui.py", "HDU-NetDebugger", console=False' in text
     assert "excludes=QT_MODULES" in text
 
 

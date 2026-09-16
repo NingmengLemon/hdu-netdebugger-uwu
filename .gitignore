@@ -35,6 +35,9 @@ MANIFEST
 # 自动生成的临时 spec 用的）
 !packaging/*.spec
 
+# 编辑器/IDE 的本地配置
+.vscode/
+
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt

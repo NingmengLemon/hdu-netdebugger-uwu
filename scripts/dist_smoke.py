@@ -26,6 +26,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 from pathlib import Path
 
@@ -34,6 +35,17 @@ DIST = ROOT / "dist"
 
 #: 冻结产物里的可执行文件名（Windows 带 .exe）
 EXE_SUFFIX = ".exe" if sys.platform == "win32" else ""
+
+
+def find_cli() -> Path | None:
+    """定位 CLI 产物：onefile 是 ``dist/hnd[.exe]``，onedir 是 ``dist/hnd/hnd[.exe]``。
+
+    两种形态都认，这样"CLI 用 onefile 还是 onedir"可以随时改而不必动门禁。
+    """
+    for candidate in (DIST / f"hnd{EXE_SUFFIX}", DIST / "hnd" / f"hnd{EXE_SUFFIX}"):
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def project_version() -> str:
@@ -71,18 +83,27 @@ def check(condition: bool, message: str, failures: list[str]) -> None:
 def main() -> int:
     failures: list[str] = []
     version = project_version()
-    cli = DIST / "hnd" / f"hnd{EXE_SUFFIX}"
+    cli = find_cli()
     gui_smoke = DIST / "hnd-gui-smoke" / f"hnd-gui-smoke{EXE_SUFFIX}"
 
     print(f"产物目录: {DIST}")
-    for executable in (cli, gui_smoke):
-        if not executable.is_file():
-            print(f"缺少产物: {executable}（先跑 pyinstaller）", file=sys.stderr)
-            return 1
+    if cli is None:
+        print(
+            f"找不到 CLI 产物（dist/hnd{EXE_SUFFIX} 或 dist/hnd/hnd{EXE_SUFFIX}）", file=sys.stderr
+        )
+        return 1
+    if not gui_smoke.is_file():
+        print(f"缺少产物: {gui_smoke}（先跑 pyinstaller）", file=sys.stderr)
+        return 1
+    print(f"CLI: {cli.relative_to(ROOT)}（{cli.stat().st_size / 1024 / 1024:.1f} MB）")
 
     print("[1/4] hnd --version")
+    started = time.perf_counter()
     done = run_frozen(cli, "--version")
+    elapsed = time.perf_counter() - started
     check(done.returncode == 0, f"退出码为 0（实际 {done.returncode}）", failures)
+    # 只报告不判定：onefile 每次启动都要解压，这个数字是选形态时的依据
+    print(f"       启动耗时 {elapsed:.2f}s")
     check(
         version in done.stdout,
         f"输出里带版本号 {version}（实际 {done.stdout.strip()!r}）",

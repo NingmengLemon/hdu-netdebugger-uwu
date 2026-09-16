@@ -1,14 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller 打包脚本：一次构建出三个产物.
 
-==================  ======  ====================================================
-产物                子系统  用途
-==================  ======  ====================================================
-``hnd``             控制台  CLI（``hnd run`` 等）；排除 PySide6，又小又快
-``HDU-NetDebugger`` 窗口    GUI，不带控制台窗口
-``hnd-gui-smoke``   控制台  只给 CI 用：冻结 ``scripts/gui_smoke.py`` 跑一轮，
-                            证明打进去的 Qt 插件 / QSS / QThread 真的能工作
-==================  ======  ====================================================
+==================  ======  ========  ===========================================
+产物                子系统  形态      用途
+==================  ======  ========  ===========================================
+``hnd``             控制台  onefile   CLI；排除 PySide6；发一个文件就能用
+``HDU-NetDebugger`` 窗口    onedir    GUI，带 Qt
+``hnd-gui-smoke``   控制台  onedir    只给 CI 用：冻结 ``scripts/gui_smoke.py``
+                                     跑一轮，证明打进去的 Qt 插件 / QSS /
+                                     QThread 真的能工作
+==================  ======  ========  ===========================================
 
 用法（**必须在项目根目录**执行）::
 
@@ -20,8 +21,9 @@
 
 技术选择说明：
 
-* **onedir 而非 onefile**：onefile 每次启动都要解压到临时目录（几秒），
-  还会触发杀软"自解压 + 执行"的启发式；本工具会被反复调用，不该付这个税。
+* **形态按产物分**：CLI 用 **onefile**（"发一个文件就能用"是它最重要的属性，代价是
+  启动时解压一次，实测数百毫秒量级）；GUI 用 **onedir**（100MB+ 的包每次启动都解压
+  一遍完全不能接受，而且窗口程序本来就要连目录一起发）。
 * **不用 UPX**：省下的体积不到 5 MB，而 UPX 会弄坏 Qt 插件与开了 CFG 的 DLL。
 * **不设 runtime_options**：skill 里写的 ``runtime_options=['utf8_mode=1']``
   在 PyInstaller 6.22.3 里并不存在（已改名 ``--python-option``）。冻结后非 ASCII
@@ -85,8 +87,8 @@ def pin_python_openssl(analysis: Analysis) -> None:
             analysis.binaries.append((name, str(source), "BINARY"))
 
 
-def bundle(entry: str, name: str, *, console: bool, excludes: list[str]) -> None:
-    """分析一个入口并产出 ``dist/<name>/`` 目录式产物。"""
+def analyze(entry: str, *, excludes: list[str]) -> Analysis:
+    """分析一个入口（两个 bundle 函数共用）。"""
     analysis = Analysis(
         [str(ROOT / entry)],
         pathex=[str(ROOT / "src")],
@@ -94,21 +96,52 @@ def bundle(entry: str, name: str, *, console: bool, excludes: list[str]) -> None
         excludes=excludes,
     )
     pin_python_openssl(analysis)
+    return analysis
+
+
+def exe_options(name: str, *, console: bool) -> dict:
+    """两个形态共用的 EXE 参数。"""
+    return {
+        "name": name,
+        "console": console,
+        "upx": False,
+        "icon": None,
+        "version": str(VERSION_FILE) if sys.platform == "win32" else None,
+    }
+
+
+def bundle_onedir(entry: str, name: str, *, console: bool, excludes: list[str]) -> None:
+    """产出 ``dist/<name>/`` 目录式产物（GUI 与冒烟用）。"""
+    analysis = analyze(entry, excludes=excludes)
     pyz = PYZ(analysis.pure)
     exe = EXE(
         pyz,
         analysis.scripts,
         [],
         exclude_binaries=True,
-        name=name,
-        console=console,
-        upx=False,
-        icon=None,
-        version=str(VERSION_FILE) if sys.platform == "win32" else None,
+        **exe_options(name, console=console),
     )
     COLLECT(exe, analysis.binaries, analysis.datas, name=name)
 
 
-bundle("packaging/entry_cli.py", "hnd", console=True, excludes=QT_MODULES)
-bundle("packaging/entry_gui.py", "HDU-NetDebugger", console=False, excludes=[])
-bundle("scripts/gui_smoke.py", "hnd-gui-smoke", console=True, excludes=[])
+def bundle_onefile(entry: str, name: str, *, console: bool, excludes: list[str]) -> None:
+    """产出 ``dist/<name>[.exe]`` 单文件产物（CLI 用）。
+
+    onefile 的代价是每次启动都要把内容解压到临时目录；CLI 是"发一个文件给人就能用"
+    的场景，值得付这个代价（GUI 那种一次启动、动辄 100MB+ 的就不值，见 README）。
+    """
+    analysis = analyze(entry, excludes=excludes)
+    pyz = PYZ(analysis.pure)
+    EXE(
+        pyz,
+        analysis.scripts,
+        analysis.binaries,
+        analysis.datas,
+        [],
+        **exe_options(name, console=console),
+    )
+
+
+bundle_onefile("packaging/entry_cli.py", "hnd", console=True, excludes=QT_MODULES)
+bundle_onedir("packaging/entry_gui.py", "HDU-NetDebugger", console=False, excludes=[])
+bundle_onedir("scripts/gui_smoke.py", "hnd-gui-smoke", console=True, excludes=[])

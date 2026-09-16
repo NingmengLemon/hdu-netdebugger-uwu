@@ -136,11 +136,11 @@ uv run --group build pyinstaller --clean --noconfirm packaging/hnd.spec
 make exe                                      # Windows： pwsh -File scripts/tasks.ps1 exe
 ```
 
-| 产物 | 子系统 | 说明 |
-|------|--------|------|
-| `dist/hnd/hnd` | 控制台 | CLI；排除了 PySide6，约 30 MB |
-| `dist/HDU-NetDebugger/HDU-NetDebugger` | 窗口 | GUI，带 Qt，约 120 MB |
-| `dist/hnd-gui-smoke/hnd-gui-smoke` | 控制台 | 只给 CI 用：冻结 `scripts/gui_smoke.py`，证明打进包里的 Qt 能用 |
+| 产物 | 子系统 | 形态 | 说明 |
+|------|--------|------|------|
+| `dist/hnd.exe`（Linux/macOS 下是 `dist/hnd`） | 控制台 | onefile | CLI；排除了 PySide6；**单文件 14 MB**，发一个文件就能用 |
+| `dist/HDU-NetDebugger/` | 窗口 | onedir | GUI，带 Qt，约 121 MB |
+| `dist/hnd-gui-smoke/` | 控制台 | onedir | 只给 CI 用：冻结 `scripts/gui_smoke.py`，证明打进包里的 Qt 能用 |
 
 打完**必须**跑一遍产物自检（CI 的 `exe` 作业就是「打包 + 自检」这两步）：
 
@@ -150,8 +150,10 @@ uv run python scripts/dist_smoke.py     # CLI --version/list/doctor + 离屏跑 
 
 选型与取舍：
 
-- **onedir 而非 onefile**：onefile 每次启动都要解压到临时目录（几秒），还会踩到杀软
-  "自解压 + 执行"的启发式；本工具会被反复调用，不该付这个税。
+- **形态按产物分**：CLI 用 **onefile**（"发一个文件就能用"是它最重要的属性，实测本机
+  `hnd --version` 每次启动 1.4~1.7s，其中绝大部分是解压 29 MB 内容到临时目录；
+  `hnd run` 本身要几秒，所以这点开销无所谓）；GUI 用 **onedir**（121 MB 的包每次启动都
+  解压一遍完全不能接受，而且窗口程序本来就要连目录一起发）。
 - **不用 UPX**：体积省不到 5 MB，却会弄坏 Qt 插件与开了 CFG 的 DLL。
 - **选 PyInstaller 而不是 Nuitka**：Nuitka 官方文档把 Windows 杀软误报的解法放在**付费**的
   Commercial 计划里且"不保证有效"；本项目是免费校园工具，PyInstaller 那条缓解路线
@@ -161,6 +163,13 @@ uv run python scripts/dist_smoke.py     # CLI --version/list/doctor + 离屏跑 
 - 冻结后 `PYTHONUTF8` / `PYTHONIOENCODING` 会失效，因此 CLI 入口显式把
   stdout / stderr 固定成 UTF-8 + `errors="replace"`（`cli._make_stdio_robust`）：
   重定向出来的 Markdown 与 `--json` 都是合法 UTF-8，界面符号即使编码不支持也只退化成一个 `?`。
+- **关于"把 typer 换成 click 能不能瘦身"（实测过，别再重复问）**：typer 自身的代码在产物里
+  只占 207 KB（压缩后，其中内联的 click 就占 107 KB），换成独立 click 净省约 **100 KB**，
+  不值得为此重写 490 行 CLI 并丢掉 Typer 的写法。真正的大头是 typer 的 **rich 帮助渲染**：
+  `typer/rich_utils.py` 会 import `rich.markdown`（→ markdown_it）与 `rich.traceback`
+  （→ **pygments**），实测把这两个排掉后 onefile 从 **14.30 MB 降到 12.47 MB（省 1.83 MB，13%）**。
+  要拿这笔钱只需把 `rich_markup_mode` 关掉（一行），代价是 `--help` 从 rich 面板退化成
+  click 风格的纯文本。**当前选择保留 rich 帮助**：1.8 MB 换中文界面的可读性，对"发给同学的工具"划算。
 
 > 未签名的 Windows 产物首次运行可能被 SmartScreen 拦一下（"更多信息 → 仍要运行"）。
 > 真要对外发布，建议加代码签名证书，参见 skill `pyside6-desktop` 的 signing / AV 参考。
