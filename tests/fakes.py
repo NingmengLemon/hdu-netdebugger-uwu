@@ -15,6 +15,7 @@ from hdu_netdebugger.context import CheckContext
 from hdu_netdebugger.models.enums import PingStatus
 from hdu_netdebugger.models.ping import MultiPingResult, PingReply
 from hdu_netdebugger.net.http import HttpResponse
+from hdu_netdebugger.net.trace import TraceResult
 from hdu_netdebugger.session import RunSession
 
 if TYPE_CHECKING:
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
     from hdu_netdebugger.models.interface import InterfaceInfo
     from hdu_netdebugger.net.ping import Backend, PingOptions
     from hdu_netdebugger.net.routes import DefaultRoute, RouteInfo
+    from hdu_netdebugger.net.trace import TraceHop
 
 __all__ = [
     "SRUN_DEVICE_DETAIL",
@@ -30,6 +32,7 @@ __all__ = [
     "FakeHttp",
     "FakePinger",
     "FakeRouter",
+    "FakeTracer",
     "make_session",
     "srun_jsonp",
 ]
@@ -169,6 +172,28 @@ class FakeRouter:
         return self.routes.get(target)
 
 
+class FakeTracer:
+    """按目标返回预置逐跳结果的替身。
+
+    默认返回"全程无应答"的结果（等价于"跳数不可得"），需要具体路径时用
+    :meth:`set_hops` 编排。
+    """
+
+    def __init__(self, hops: Mapping[str, Sequence[TraceHop]] | None = None) -> None:
+        self.hops: dict[str, tuple[TraceHop, ...]] = {
+            str(target): tuple(items) for target, items in (hops or {}).items()
+        }
+        self.calls: list[str] = []
+
+    def set_hops(self, target: str, hops: Sequence[TraceHop]) -> None:
+        """给某个目标编排逐跳结果。"""
+        self.hops[str(target)] = tuple(hops)
+
+    async def __call__(self, target: str) -> TraceResult:
+        self.calls.append(target)
+        return TraceResult(target=target, hops=self.hops.get(target, ()))
+
+
 class FakeHttp:
     """按 URL 精确匹配返回预置响应的 HTTP 替身。"""
 
@@ -226,13 +251,14 @@ def make_session(
     router: FakeRouter | None = None,
     interfaces: Sequence[InterfaceInfo] = (),
     routes: Sequence[DefaultRoute] = (),
+    tracer: FakeTracer | None = None,
     **config_overrides: Any,
 ) -> RunSession:
     """构造注入了假网络的 session。
 
-    默认把路由查询、默认路由表与接口列表都换成替身：否则每个检查项测试都会去调真实的
-    ``GetIpForwardTable2`` / ``GetBestRoute`` / 枚举真实网卡，既慢又让测试依赖跑测机器的
-    网络配置（在 Linux 上默认路由表本来就是空的，断言会平台相关）。
+    默认把路由查询、默认路由表、接口列表与逐跳探测都换成替身：否则每个检查项测试都会去调
+    真实的 ``GetIpForwardTable2`` / ``GetBestRoute`` / 枚举真实网卡 / 跑真实 ``tracert``，
+    既慢又让测试依赖跑测机器的网络配置。
     """
     return RunSession(
         config=RunConfig(**config_overrides),
@@ -242,6 +268,7 @@ def make_session(
         router=router or FakeRouter(),
         interfaces=list(interfaces),
         route_lister=lambda: tuple(routes),
+        tracer=tracer or FakeTracer(),
     )
 
 

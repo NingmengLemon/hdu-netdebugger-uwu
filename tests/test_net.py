@@ -662,13 +662,37 @@ class TestWindowsReplyClassification:
         assert reply.status is PingStatus.TIMEOUT
         assert reply.rtt_ms is None
 
-    @pytest.mark.parametrize("status", [11002, 11003, 11004, 11005, 11018, 11013, 11014])
-    def test_unreachable_and_ttl_expired(self, status: int) -> None:
+    @pytest.mark.parametrize("status", [11002, 11003, 11004, 11005, 11018])
+    def test_unreachable(self, status: int) -> None:
         reply = ping_module._classify_windows_reply(
             1, b"", _WindowsReplyStub.with_values(status), 1
         )
         assert reply.status is PingStatus.UNREACHABLE
         assert f"IP_STATUS={status}" in (reply.error or "")
+
+    @pytest.mark.parametrize("status", [11013, 11014])
+    def test_ttl_expired_carries_the_intermediate_address(self, status: int) -> None:
+        """TTL 超时不等于"不可达"：回复的 Address 是**中间设备**，逐跳探测靠它。
+
+        实测：TTL=1 时 Address 是网关、TTL=2 是 BAS，与 tracert 的前两跳一致。
+        """
+        reply = ping_module._classify_windows_reply(
+            1,
+            b"",
+            _WindowsReplyStub.with_values(
+                status, ttl=64, address=network_order_ipaddr("192.0.2.1")
+            ),
+            1,
+        )
+
+        assert reply.status is PingStatus.UNREACHABLE
+        assert "TTL 超时" in (reply.error or "")
+        assert reply.source == "192.0.2.1"
+
+    def test_ttl_expired_without_address(self) -> None:
+        reply = ping_module._classify_windows_reply(1, b"", _WindowsReplyStub.with_values(11013), 1)
+        assert reply.source is None
+        assert reply.status is PingStatus.UNREACHABLE
 
     def test_unknown_status_is_error(self) -> None:
         reply = ping_module._classify_windows_reply(1, b"", _WindowsReplyStub.with_values(12345), 1)

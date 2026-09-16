@@ -20,6 +20,7 @@ from hdu_netdebugger.net.http import HttpClient
 from hdu_netdebugger.net.interfaces import list_interfaces
 from hdu_netdebugger.net.ping import Backend, PingOptions, ping_multiple
 from hdu_netdebugger.net.routes import Egress, RouteInfo, default_routes, route_for
+from hdu_netdebugger.net.trace import TraceResult, traceroute
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
@@ -37,6 +38,8 @@ if TYPE_CHECKING:
     Router = Callable[..., "RouteInfo | None"]
     #: 默认路由列表的签名：``() -> Sequence[DefaultRoute]``
     RouteLister = Callable[..., "Sequence[DefaultRoute]"]
+    #: 逐跳探测的签名：``(目标) -> TraceResult``
+    Tracer = Callable[..., Awaitable[TraceResult]]
 
 __all__ = ["RunSession"]
 
@@ -51,6 +54,7 @@ class RunSession:
         "_pinger",
         "_route_lister",
         "_router",
+        "_tracer",
         "config",
         "context",
         "ping_backend",
@@ -69,6 +73,7 @@ class RunSession:
         router: Router | None = None,
         interfaces: Sequence[InterfaceInfo] | None = None,
         route_lister: RouteLister | None = None,
+        tracer: Tracer | None = None,
     ) -> None:
         self.config = config or RunConfig()
         self.context = context or CheckContext()
@@ -80,6 +85,7 @@ class RunSession:
         self._pinger = pinger or ping_multiple
         self._router = router or route_for
         self._route_lister = route_lister or default_routes
+        self._tracer = tracer or traceroute
         #: 接口快照：``None`` 表示"还没枚举过"；测试可以直接注入样本
         self._interfaces: list[InterfaceInfo] | None = (
             None if interfaces is None else list(interfaces)
@@ -164,6 +170,14 @@ class RunSession:
                 timeout_s=min(options.timeout_s, MTU_PROBE_TIMEOUT_S),
             )
         return await self._pinger(str(target), options, backend=Backend.SYSTEM)
+
+    async def trace(self, target: object) -> TraceResult:
+        """跑一次逐跳探测（``traceroute`` / ``tracert``）。
+
+        Raises:
+            BackendUnavailable: 本机没有 traceroute 命令，或它超时了。
+        """
+        return await self._tracer(str(target))
 
     def egress(self, target: object) -> Egress:
         """查这次探测从哪个接口出去（校园网里这条证据经常比"通不通"更关键）。

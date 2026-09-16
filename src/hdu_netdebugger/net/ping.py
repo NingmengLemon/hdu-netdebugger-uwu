@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import asyncio
-import locale
 import re
 import socket
 import sys
@@ -29,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 
 from hdu_netdebugger.models.enums import PingStatus
 from hdu_netdebugger.models.ping import MultiPingResult, PingReply
+from hdu_netdebugger.net.console import decode_console_output
 from hdu_netdebugger.net.winaddr import network_order_ipaddr, text_from_network_order
 
 if TYPE_CHECKING:
@@ -354,7 +354,18 @@ def _classify_windows_reply(
             status=PingStatus.UNREACHABLE,
             error="ICMP 需要分片（包超过路径 MTU）",
         )
-    if status in _IP_UNREACHABLE or status in _IP_TTL_EXPIRED:
+    if status in _IP_TTL_EXPIRED:
+        # TTL 超时的回复里 **Address 是那台中间设备的地址**（实测 TTL=1 得到网关、
+        # TTL=2 得到 BAS，与 tracert 前两跳一致），逐跳探测就靠它。
+        reply = reply_type.from_buffer(reply_buffer)
+        return PingReply(
+            sequence=sequence,
+            status=PingStatus.UNREACHABLE,
+            rtt_ms=float(reply.RoundTripTime) or None,
+            error="TTL 超时（中间设备回了 ICMP）",
+            source=text_from_network_order(int(reply.Address)),
+        )
+    if status in _IP_UNREACHABLE:
         return PingReply(
             sequence=sequence, status=PingStatus.UNREACHABLE, error=f"IP_STATUS={status}"
         )
@@ -467,12 +478,10 @@ _SOURCE_PATTERN = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b")
 def _decode_console_output(raw: bytes) -> str:
     """解码系统 ``ping`` 的输出。
 
-    Windows 上 ``ping`` 写的是 **OEM 代码页**（中文系统通常是 936），不是 UTF-8 ——
-    即便开了 ``PYTHONUTF8`` 也一样，所以不能拿 locale 编码碰运气。
-    解析只需要 ASCII 的 ``ttl=`` 与 ``ms``，这里的目标只是别把中文字段弄成乱码。
+    实现已挪到 :func:`hdu_netdebugger.net.console.decode_console_output`
+    （``net.trace`` 要用同一套编码约定），这里保留同名薄封装，免得调用方与测试到处改。
     """
-    encoding = "oem" if sys.platform == "win32" else locale.getpreferredencoding(do_setlocale=False)
-    return raw.decode(encoding or "utf-8", errors="replace")
+    return decode_console_output(raw)
 
 
 async def _system_ping(address: str, opts: PingOptions) -> MultiPingResult:

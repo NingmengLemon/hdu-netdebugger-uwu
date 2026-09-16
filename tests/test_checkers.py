@@ -17,6 +17,7 @@ from hdu_netdebugger.checkers.get_info import GetInfoCheck
 from hdu_netdebugger.checkers.ipv6 import V6_PROBE_TARGET, IPv6Check
 from hdu_netdebugger.checkers.isp import ISPCheck
 from hdu_netdebugger.checkers.mtu import MtuCheck
+from hdu_netdebugger.checkers.path import PathCheck
 from hdu_netdebugger.checkers.proxy import (
     ProxyCheck,
     ProxyHit,
@@ -45,8 +46,16 @@ from hdu_netdebugger.net.dns import DnsResult
 from hdu_netdebugger.net.mtu import MAX_PROBE_PAYLOAD
 from hdu_netdebugger.net.ping import Backend, BackendUnavailable
 from hdu_netdebugger.net.routes import DefaultRoute, RouteInfo
+from hdu_netdebugger.net.trace import TraceHop
 from hdu_netdebugger.session import RunSession
-from tests.fakes import FakeHttp, FakePinger, FakeRouter, make_session, srun_jsonp
+from tests.fakes import (
+    FakeHttp,
+    FakePinger,
+    FakeRouter,
+    FakeTracer,
+    make_session,
+    srun_jsonp,
+)
 
 if TYPE_CHECKING:
     from hdu_netdebugger.models.result import CheckResult
@@ -1534,6 +1543,99 @@ class TestIPv6Check:
         assert result.status is CheckResultStatus.WARN
         assert any("IPv6 路径 MTU 受限" in item and "1420" in item for item in result.warnings)
         assert any("ICMPv6 Type 2" in item for item in result.suggestions)
+
+
+class TestPathCheck:
+    """逐跳路径：回答"断点在第几跳"。"""
+
+    @staticmethod
+    def _reached(target: str, hops: int) -> list[TraceHop]:
+        """造一条"中间若干跳 + 最后一跳是目标"的路径。"""
+        middle = [
+            TraceHop(ttl=index + 1, address=f"192.0.2.{index + 1}") for index in range(hops - 1)
+        ]
+        return [*middle, TraceHop(ttl=hops, address=target, rtt_ms=1.0)]
+
+    async def test_both_targets_reached_passes(self) -> None:
+        tracer = FakeTracer()
+        tracer.set_hops(str(SRUN_IP), self._reached(str(SRUN_IP), 6))
+        tracer.set_hops(str(ALI_DNS_IP), self._reached(str(ALI_DNS_IP), 8))
+        pinger = FakePinger()
+        pinger.set_reachable(str(SRUN_IP), str(ALI_DNS_IP))
+
+        result = await run_check(PathCheck, make_session(pinger=pinger, tracer=tracer))
+
+        assert result.status is CheckResultStatus.PASS
+        assert "6 跳" in result.summary
+        assert "8 跳" in result.summary
+
+    async def test_tunnel_egress_refuses_to_trace(self) -> None:
+        """有 TUN 时跳数是伪造的（实测显示成 1 跳），本项必须直接放弃而不是给假结果。"""
+        tunnel = RouteInfo(interface_index=75, metric=0)
+        tracer = FakeTracer()
+        session = make_session(
+            router=FakeRouter({str(SRUN_IP): tunnel, str(ALI_DNS_IP): tunnel}),
+            interfaces=[
+                InterfaceInfo(
+                    name="Mihomo",
+                    description="Meta Tunnel",
+                    kind=InterfaceKind.PROP_VIRTUAL,
+                    is_up=True,
+                    index=75,
+                )
+            ],
+            tracer=tracer,
+        )
+
+        result = await run_check(PathCheck, session)
+
+        assert result.status is CheckResultStatus.WARN
+        assert "有 TUN" in result.summary
+        assert any("跳数是伪造的" in item for item in result.warnings)
+        assert tracer.calls == [], "有 TUN 时不该真的去跑逐跳探测"
+
+    async def test_unreachable_target_points_at_the_last_answering_hop(self) -> None:
+        """目标不可达时，"最后有应答的那一跳"就是断点。"""
+        tracer = FakeTracer()
+        tracer.set_hops(
+            str(SRUN_IP),
+            [TraceHop(ttl=1, address="192.0.2.1"), TraceHop(ttl=2), TraceHop(ttl=3)],
+        )
+        tracer.set_hops(
+            str(ALI_DNS_IP),
+            [TraceHop(ttl=1, address="192.0.2.1"), TraceHop(ttl=2)],
+        )
+
+        result = await run_check(PathCheck, make_session(pinger=FakePinger(), tracer=tracer))
+
+        assert result.status is CheckResultStatus.WARN
+        assert any("第 1 跳之后" in item and "192.0.2.1" in item for item in result.warnings)
+
+    async def test_silent_hops_with_reachable_target_is_not_a_fault(self) -> None:
+        """沿途不回 TTL 超时非常常见，目标照样可达 —— 那是拿不到证据，不是故障。"""
+        tracer = FakeTracer()
+        tracer.set_hops(str(SRUN_IP), [TraceHop(ttl=1, address="192.0.2.1")])
+        tracer.set_hops(str(ALI_DNS_IP), [TraceHop(ttl=1, address="192.0.2.1")])
+        pinger = FakePinger()
+        pinger.set_reachable(str(SRUN_IP), str(ALI_DNS_IP))
+
+        result = await run_check(PathCheck, make_session(pinger=pinger, tracer=tracer))
+
+        assert result.status is CheckResultStatus.PASS
+        assert not any("之后" in item for item in result.warnings)
+
+    async def test_missing_traceroute_is_reported(self) -> None:
+        class _NoTraceSession(RunSession):
+            async def trace(self, *_args: Any, **_kwargs: Any) -> Any:
+                raise BackendUnavailable("本机没有 traceroute 命令")
+
+        session = _NoTraceSession(router=FakeRouter(), interfaces=[])
+
+        result = await run_check(PathCheck, session)
+
+        assert result.status is CheckResultStatus.WARN
+        assert "无法进行逐跳探测" in result.summary
+        assert any("traceroute" in item for item in result.suggestions)
 
 
 class TestProxyCheck:

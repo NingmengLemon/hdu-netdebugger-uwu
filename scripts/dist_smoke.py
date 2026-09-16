@@ -124,8 +124,8 @@ def main() -> int:
     check("检查DNS可用性" in done.stdout, "能列出检查项（UTF-8 中文正常）", failures)
     check("检查公网可达性" in done.stdout, "原版 8 项都在", failures)
     # 新增能力也要真的进包：冻结产物里少一个检查项是最容易悄悄发生的事
-    check("检查路径MTU" in done.stdout, "新增的路径 MTU 检查在包里", failures)
-    check("检查IPv6" in done.stdout, "新增的 IPv6 检查在包里", failures)
+    for name in ("检查路径MTU", "检查IPv6", "检查逐跳路径"):
+        check(name in done.stdout, f"新增的 {name} 在包里", failures)
 
     print("[3/4] hnd doctor（ctypes / psutil / 三个 Ping 后端）")
     done = run_frozen(cli, "doctor")

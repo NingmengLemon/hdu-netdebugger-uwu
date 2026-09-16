@@ -15,6 +15,7 @@ from hdu_netdebugger.checkers.get_info import GetInfoCheck
 from hdu_netdebugger.checkers.ipv6 import IPv6Check
 from hdu_netdebugger.checkers.isp import ISPCheck
 from hdu_netdebugger.checkers.mtu import MtuCheck
+from hdu_netdebugger.checkers.path import PathCheck
 from hdu_netdebugger.checkers.proxy import ProxyCheck
 from hdu_netdebugger.checkers.public_net import PublicNetCheck
 from hdu_netdebugger.checkers.srun_reachability import SrunReachabilityCheck
@@ -29,6 +30,7 @@ __all__ = [
     "IPv6Check",
     "ISPCheck",
     "MtuCheck",
+    "PathCheck",
     "ProxyCheck",
     "PublicNetCheck",
     "SrunReachabilityCheck",
