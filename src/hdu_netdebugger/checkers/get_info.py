@@ -54,17 +54,25 @@ class GetInfoCheck(Checker):
         found_any = False
 
         for interface in interfaces:
-            if not interface.is_up:
-                continue
-            if interface.kind is InterfaceKind.ETHERNET and interface.ipv4:
+            usable_ethernet = (
+                interface.kind is InterfaceKind.ETHERNET and interface.ipv4 and interface.is_up
+            )
+            if usable_ethernet:
                 found_any = True
                 self.log_lines(interface.describe())
                 self.log_lines(interface.describe_config())
+                self._check_random_mac(interface)
                 network = interface.network
                 if network is not None:
                     # 与原版一致：后匹配到的接口覆盖前面的结果
                     self.context.network_kind = network
-            elif interface.is_vpn_like:
+            elif interface.kind is InterfaceKind.ETHERNET and not interface.is_up:
+                # 链路没建立的有线网卡也要打出来：群里有过"网线明明插着、系统却说没插"，
+                # 最后靠把协商速率手动降到 100M 才通的案例 —— 那种情况下
+                # 唯一的证据就是这块网卡自己（是否链路 up、协商到多少）
+                self.log(f"有线网卡 {interface.name} 链路未建立：")
+                self.log_lines(interface.describe_config())
+            elif interface.is_vpn_like and interface.is_up:
                 found_any = True
                 self._report_tunnel(interface)
 
@@ -85,6 +93,20 @@ class GetInfoCheck(Checker):
         )
         self.log_lines(interface.describe())
         self.context.has_tunnel_interface = True
+
+    def _check_random_mac(self, interface: InterfaceInfo) -> None:
+        """MAC 被随机化会让"无感知认证"失效（杭电按 MAC 绑定）。
+
+        群体证据：管理员在群里两次把认证 / 联网异常指向"网卡 MAC 是不是设的随机"。
+        判据是 IEEE 802 的本地管理位，不需要额外系统调用（MAC 在枚举网卡时就有了）。
+        """
+        if not interface.is_random_mac:
+            return
+        self.add_warning(f"网卡 {interface.name} 使用的是随机化 MAC（{interface.mac}）")
+        self.add_suggestion(
+            "校园网按 MAC 做无感知认证，随机 MAC 会导致频繁掉认证；"
+            "建议在系统设置里关闭该网卡的「随机硬件地址」并改用固定 MAC"
+        )
 
     def _report_egress(self) -> None:
         """记录探测流量实际从哪个接口出去，并在被隧道接管时明确警告。"""

@@ -20,7 +20,7 @@ class BASCheck(Checker):
     async def check(self) -> None:
         result = await self.session.ping(BAS_IP)
         self.log(self.session.egress(BAS_IP).describe())
-        self.log_lines(result.detail_lines())
+        self.log_ping_evidence(BAS_IP, result)
 
         if result.all_succeeded:
             self.passed("BAS 可达")

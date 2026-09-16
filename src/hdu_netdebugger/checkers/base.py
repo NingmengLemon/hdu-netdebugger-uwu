@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
     from hdu_netdebugger.config import RunConfig
     from hdu_netdebugger.context import CheckContext
+    from hdu_netdebugger.models.ping import MultiPingResult
     from hdu_netdebugger.session import RunSession
 
 __all__ = ["Checker", "DetailsLog"]
@@ -137,3 +138,19 @@ class Checker(ABC):
     def log_lines(self, lines: Iterable[str]) -> None:
         """批量追加详细日志。"""
         self._details.extend(lines)
+
+    def log_ping_evidence(self, target: object, result: MultiPingResult) -> None:
+        """写 ping 的详细日志，并在回复来源异常时给出警告。
+
+        ICMP 回复理应来自被探测的主机。若来源是别的地址，说明中间有设备在替它应答
+        （本机的 TUN 就会这样），这种"可达"不能当作校园链路的证据 —— 所以要单独
+        提醒一次，而不是把它混在几百行详细日志里。
+        """
+        self.log_lines(result.detail_lines())
+        sources = sorted(set(result.unexpected_sources))
+        if sources:
+            self.add_warning(
+                f"ICMP 回复来自非目标地址（{'、'.join(sources)}），"
+                f"而不是 {target}：中间可能有隧道 / 代理在替它应答，"
+                "本次「可达」不代表真实链路可达"
+            )

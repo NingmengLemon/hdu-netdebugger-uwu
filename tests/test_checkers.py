@@ -369,6 +369,32 @@ class TestPingBasedChecks:
         assert options.count == 2
         assert backend is Backend.AUTO
 
+    async def test_warns_when_a_reply_comes_from_another_address(
+        self,
+        session: RunSession,
+        pinger: FakePinger,
+    ) -> None:
+        """ICMP 回复理应来自被探测的主机；来源不对说明中间有设备替它应答。"""
+        pinger.set_reachable(str(BAS_IP))
+        pinger.source = "192.0.2.99"
+
+        result = await run_check(BASCheck, session)
+
+        assert any("非目标地址" in item for item in result.warnings)
+        assert any("192.0.2.99" in item for item in result.warnings)
+
+    async def test_no_source_warning_when_source_matches(
+        self,
+        session: RunSession,
+        pinger: FakePinger,
+    ) -> None:
+        pinger.set_reachable(str(BAS_IP))
+        pinger.source = str(BAS_IP)
+
+        result = await run_check(BASCheck, session)
+
+        assert not any("非目标地址" in item for item in result.warnings)
+
     async def test_bas_full_loss_fails(
         self,
         session: RunSession,
@@ -799,6 +825,63 @@ class TestAuthCheck:
         result = await run_check(AuthCheck, session)
         assert result.status is CheckResultStatus.FAIL
         assert any("认证请求失败" in item for item in result.warnings)
+
+    async def test_falls_back_to_plain_http(
+        self,
+        session: RunSession,
+        fake_http: FakeHttp,
+        srun_ok_text: str,
+        ok_url: str,
+    ) -> None:
+        """HTTPS 不通时改用明文 HTTP（校园认证接口监听 80，官方地址就是明文）。"""
+        session.context.dns_available = True
+        fake_http.add(ok_url, error="ConnectError: SSL 握手失败")
+        plain_url = f"http://{HDU_PORTAL_DOMAIN}/cgi-bin/rad_user_info?callback=jQuery"
+        fake_http.add(plain_url, text=srun_ok_text)
+
+        result = await run_check(AuthCheck, session)
+
+        # 认证本身是正常的（总览取自 HTTP 那条路径的结果），但 HTTPS 不通确实是问题，
+        # 所以状态被警告提升为 WARN —— 这正是我们想要的
+        assert result.status is CheckResultStatus.WARN
+        assert result.summary == "认证状态正常"
+        assert any("改用明文 HTTP" in item for item in result.warnings)
+        assert plain_url in fake_http.calls
+
+    async def test_reports_failure_when_both_transports_fail(
+        self,
+        session: RunSession,
+        fake_http: FakeHttp,
+        ok_url: str,
+    ) -> None:
+        session.context.dns_available = True
+        fake_http.add(ok_url, error="ConnectError: SSL 握手失败")
+
+        result = await run_check(AuthCheck, session)
+
+        assert result.status is CheckResultStatus.FAIL
+        assert "HTTPS 失败" in (result.details or "")
+
+    async def test_logs_the_portal_page_redirect(
+        self,
+        session: RunSession,
+        fake_http: FakeHttp,
+        srun_ok_text: str,
+        ok_url: str,
+    ) -> None:
+        """门户首页跳到哪里是一条独立线索（未认证跳登录页、已认证跳管理页）。"""
+        session.context.dns_available = True
+        fake_http.add(ok_url, text=srun_ok_text)
+        fake_http.add(
+            f"http://{HDU_PORTAL_DOMAIN}/",
+            status_code=302,
+            headers={"location": "/index_1.html"},
+        )
+
+        result = await run_check(AuthCheck, session)
+
+        assert "门户首页" in (result.details or "")
+        assert "/index_1.html" in (result.details or "")
 
     async def test_logs_online_devices(
         self,

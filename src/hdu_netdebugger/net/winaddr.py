@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from ipaddress import IPv4Address
 
-__all__ = ["network_order_ipaddr"]
+__all__ = ["network_order_ipaddr", "text_from_network_order"]
 
 
 def network_order_ipaddr(address: str | IPv4Address) -> int:
@@ -22,3 +22,14 @@ def network_order_ipaddr(address: str | IPv4Address) -> int:
         ValueError: 不是合法的 IPv4 地址（IPv6 也会在这里失败）。
     """
     return int.from_bytes(IPv4Address(str(address)).packed, "little")
+
+
+def text_from_network_order(value: int) -> str | None:
+    """把 Win32 返回的网络序 ``ULONG`` 还原成点分十进制。
+
+    ``ICMP_ECHO_REPLY.Address`` 用的是与 :func:`network_order_ipaddr` 相反的约定，
+    所以还原时同样要按小端解释字节。``0`` 表示"没有地址"，返回 ``None``。
+    """
+    if not value:
+        return None
+    return str(IPv4Address(int(value).to_bytes(4, "little")))

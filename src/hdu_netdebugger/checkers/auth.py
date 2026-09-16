@@ -10,10 +10,15 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from hdu_netdebugger.checkers.base import Checker
 from hdu_netdebugger.constants import HDU_PORTAL_DOMAIN, HDU_PORTAL_ROUTE, SRUN_IP
 from hdu_netdebugger.models.srun import SrunAuthResponse, parse_auth_response
 from hdu_netdebugger.registry import checker
+
+if TYPE_CHECKING:
+    from hdu_netdebugger.net.http import HttpResponse
 
 __all__ = ["AuthCheck"]
 
@@ -24,15 +29,21 @@ class AuthCheck(Checker):
 
     async def check(self) -> None:
         host = self._resolve_host()
-        url = f"https://{host}{HDU_PORTAL_ROUTE}"
-        self.log(f"请求 URL: {url}")
+        https_url = f"https://{host}{HDU_PORTAL_ROUTE}"
+        self.log(f"请求 URL: {https_url}")
 
-        response = await self.session.http.get(url)
+        response = await self.session.http.get(https_url)
+        self.log(f"HTTPS: {response.describe()}")
+
+        if response.error is not None:
+            response = await self._retry_over_plain_http(host, response)
         if response.error is not None:
             self.add_warning(f"认证请求失败: {response.error}")
             self.add_suggestion("请检查网络连通性，或联系ICU并提供错误信息")
             self.failed("认证状态查询失败")
             return
+
+        await self._log_portal_page(host)
 
         payload = parse_auth_response(response.text)
         if payload is None:
@@ -59,6 +70,38 @@ class AuthCheck(Checker):
         self.add_suggestion(f"请尝试重新认证，网址为 https://{HDU_PORTAL_DOMAIN}")
         self.add_suggestion("如问题依旧，请联系ICU并提供错误信息")
         self.failed("认证状态异常")
+
+    async def _retry_over_plain_http(self, host: str, failed: HttpResponse) -> HttpResponse:
+        """HTTPS 走不通时，用明文 HTTP 再试一次。
+
+        校园认证接口同时提供明文入口（官方给出的认证地址就是 ``http://192.168.112.97``），
+        所以 TLS / 代理 / 中间设备把 HTTPS 弄坏时，明文这条路往往仍然可用。实测明文
+        比 HTTPS 快得多（19ms vs 800ms 的 TLS 握手）。这里只 GET 认证状态，不发送账号口令。
+        """
+        plain_url = f"http://{host}{HDU_PORTAL_ROUTE}"
+        self.log(f"HTTPS 失败（{failed.error}），回退明文 HTTP 再试: {plain_url}")
+
+        plain = await self.session.http.get(plain_url)
+        self.log(f"HTTP: {plain.describe()}")
+        if plain.error is not None:
+            return failed
+
+        self.add_warning("HTTPS 请求失败，本次改用明文 HTTP 完成认证状态查询")
+        self.add_suggestion(
+            "HTTPS 不通通常是 TLS / 证书 / 代理 / 中间设备的问题；"
+            "若能上网但只有 HTTPS 异常，建议检查系统代理设置"
+        )
+        return plain
+
+    async def _log_portal_page(self, host: str) -> None:
+        """顺带记录门户首页的响应（证据，不参与判定）。
+
+        未认证时门户首页会跳到登录页，已认证时会跳到管理页 —— 重定向目标本身就是
+        一条有用线索，而这一步不依赖认证接口返回什么。
+        """
+        root = await self.session.http.get(f"http://{host}/")
+        location = root.headers.get("location", "(无)")
+        self.log(f"门户首页: {root.describe()}，重定向到 {location}")
 
     def _resolve_host(self) -> str:
         """决定认证接口的 host。"""

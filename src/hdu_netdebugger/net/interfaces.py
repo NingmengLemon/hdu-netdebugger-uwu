@@ -275,6 +275,7 @@ def _windows_interfaces() -> list[InterfaceInfo] | None:
                 gateway=_windows_gateway(adapter.FirstGatewayAddress),
                 dns_servers=(*dns_v4, *dns_v6),
                 dhcp_enabled=bool(int(adapter.Flags) & _IP_ADAPTER_DHCP_ENABLED),
+                mac=_format_mac(adapter.PhysicalAddress, int(adapter.PhysicalAddressLength)),
             )
         )
         cursor = (
@@ -290,6 +291,21 @@ def _windows_gateway(pointer: int | None) -> str | None:
         return None
     address = ctypes.cast(pointer, ctypes.POINTER(SocketAddress)).contents
     return _sockaddr_text(address.lpSockaddr)
+
+
+def _format_mac(raw: object, length: int) -> str | None:
+    """把 ``PhysicalAddress`` 字节数组格式化成 ``aa:bb:cc:dd:ee:ff``。
+
+    长度不合理时返回 ``None``：Windows 对"没有物理地址"的接口给长度 0，
+    隧道类接口还可能给出非 6 字节的伪地址。
+    """
+    if not length or length > 8:
+        return None
+    try:
+        octets = bytes(raw)[:length]  # ty: ignore[invalid-argument-type]
+    except TypeError:  # pragma: no cover - 防御性
+        return None
+    return ":".join(f"{octet:02x}" for octet in octets)
 
 
 def _windows_sockaddr_list(

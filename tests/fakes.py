@@ -41,6 +41,9 @@ class FakePinger:
     默认按 ``reachable`` 集合决定"全成功 / 全超时"；需要**部分丢包**时用
     :meth:`set_pattern` 直接编排逐包结果 —— 少了它，"0 < 成功数 < 总数"
     那条分支（四个检查项里都有）在测试里根本不可达。
+
+    ``ttl`` / ``source`` 用来构造"回复里带了路径证据"的场景（正常应当是
+    ``source == target``；给个别的地址就能测出"回复来源异常"的警告）。
     """
 
     def __init__(
@@ -49,10 +52,14 @@ class FakePinger:
         reachable: Iterable[str] = (),
         count: int = 4,
         rtt_ms: float = 2.0,
+        ttl: int | None = None,
+        source: str | None = None,
     ) -> None:
         self.reachable = {str(item) for item in reachable}
         self.count = count
         self.rtt_ms = rtt_ms
+        self.ttl = ttl
+        self.source = source
         self.calls: list[tuple[str, PingOptions, Backend]] = []
         self.patterns: dict[str, tuple[bool, ...]] = {}
 
@@ -82,6 +89,8 @@ class FakePinger:
                 sequence=index + 1,
                 status=PingStatus.SUCCESS if alive else PingStatus.TIMEOUT,
                 rtt_ms=self.rtt_ms if alive else None,
+                ttl=self.ttl if alive else None,
+                source=self.source if alive else None,
             )
             for index, alive in enumerate(pattern)
         )

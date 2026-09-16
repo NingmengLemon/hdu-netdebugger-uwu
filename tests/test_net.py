@@ -39,6 +39,7 @@ from hdu_netdebugger.net.ping import (
     resolve_target,
 )
 from hdu_netdebugger.net.routes import RouteInfo
+from hdu_netdebugger.net.winaddr import network_order_ipaddr
 from hdu_netdebugger.session import RunSession
 from tests.fakes import FakeHttp, FakeRouter
 
@@ -239,6 +240,29 @@ class TestSystemPingParsing:
         output = "".join(f"x ttl=57 time={i} ms\n" for i in range(10))
         result = ping_module._parse_system_ping("1.1.1.1", output, PingOptions(count=2))
         assert result.total_count == 2
+
+    def test_extracts_ttl_and_source(self) -> None:
+        """系统 ping 反而能给全路径证据（icmplib 拿不到 TTL）。"""
+        result = ping_module._parse_system_ping("10.150.0.1", CHINESE_OUTPUT, PingOptions(count=2))
+
+        assert [reply.ttl for reply in result.replies] == [64, 64]
+        assert result.replies[0].source == "10.150.0.1"
+        assert result.reply_ttl == 64
+        assert result.hops_estimate == 0
+        assert result.unexpected_sources == ()
+
+    def test_flags_a_reply_from_another_address(self) -> None:
+        output = "Reply from 192.0.2.99: bytes=32 time=1ms TTL=50\n"
+
+        result = ping_module._parse_system_ping("223.5.5.5", output, PingOptions(count=1))
+
+        assert result.unexpected_sources == ("192.0.2.99",)
+        assert result.replies[0].hops_estimate == 14
+
+    def test_linux_output_ttl_is_parsed(self) -> None:
+        result = ping_module._parse_system_ping("1.1.1.1", LINUX_OUTPUT, PingOptions(count=2))
+        assert [reply.ttl for reply in result.replies] == [57, 57]
+        assert result.replies[0].source == "1.1.1.1"
 
 
 class TestSystemPingArgs:
@@ -511,19 +535,39 @@ class TestConsoleOutputDecoding:
         assert isinstance(ping_module._decode_console_output(b"\xff\xfe\x00abc"), str)
 
 
+class _ReplyOptionsStub:
+    """``IP_OPTION_INFORMATION`` 里本工具只读 Ttl。"""
+
+    Ttl = 0
+
+
 class _WindowsReplyStub:
-    """替代 ``ICMP_ECHO_REPLY``：``_classify_windows_reply`` 只用到这两个字段。"""
+    """替代 ``ICMP_ECHO_REPLY``：``_classify_windows_reply`` 只用到这几项。"""
 
     Status = 0
     RoundTripTime = 0
+    Address = 0
+    Options = _ReplyOptionsStub()
 
     @classmethod
     def from_buffer(cls, _buffer: object) -> type[_WindowsReplyStub]:
         return cls
 
     @classmethod
-    def with_values(cls, status: int, rtt: int = 0) -> type[_WindowsReplyStub]:
-        return type("_WindowsReplyStub", (cls,), {"Status": status, "RoundTripTime": rtt})
+    def with_values(
+        cls,
+        status: int,
+        rtt: int = 0,
+        *,
+        ttl: int = 0,
+        address: int = 0,
+    ) -> type[_WindowsReplyStub]:
+        options = type("_ReplyOptionsStub", (_ReplyOptionsStub,), {"Ttl": ttl})
+        return type(
+            "_WindowsReplyStub",
+            (cls,),
+            {"Status": status, "RoundTripTime": rtt, "Address": address, "Options": options},
+        )
 
 
 class TestWindowsReplyClassification:
@@ -539,6 +583,29 @@ class TestWindowsReplyClassification:
         assert reply.rtt_ms == 7.0
         assert reply.sequence == 3
         assert reply.ok is True
+
+    def test_success_carries_ttl_and_source(self) -> None:
+        """TTL 与回复来源是判断"ICMP 有没有被中间层接管"的证据，必须带上。"""
+        reply = ping_module._classify_windows_reply(
+            1,
+            b"",
+            _WindowsReplyStub.with_values(
+                0,
+                7,
+                ttl=59,
+                address=network_order_ipaddr("192.0.2.1"),
+            ),
+            1,
+        )
+
+        assert reply.ttl == 59
+        assert reply.source == "192.0.2.1", "Address 的网络序 ULONG 要按小端还原"
+        assert reply.hops_estimate == 5
+
+    def test_zero_address_means_unknown_source(self) -> None:
+        reply = ping_module._classify_windows_reply(1, b"", _WindowsReplyStub.with_values(0, 7), 1)
+        assert reply.ttl is None
+        assert reply.source is None
 
     def test_status_timeout(self) -> None:
         reply = ping_module._classify_windows_reply(

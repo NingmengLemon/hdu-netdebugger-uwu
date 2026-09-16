@@ -18,7 +18,7 @@ import pytest
 from hdu_netdebugger.models.interface import InterfaceInfo, InterfaceKind
 from hdu_netdebugger.net import routes as routes_module
 from hdu_netdebugger.net.routes import Egress, RouteInfo, describe_route, route_for
-from hdu_netdebugger.net.winaddr import network_order_ipaddr
+from hdu_netdebugger.net.winaddr import network_order_ipaddr, text_from_network_order
 
 FAKE_PROC_ROUTE = (
     "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n"
@@ -63,6 +63,21 @@ class TestNetworkOrderIpaddr:
     def test_rejects_ipv6(self) -> None:
         with pytest.raises(ValueError):
             network_order_ipaddr("2001:db8::1")
+
+    @pytest.mark.parametrize(
+        ("text", "value"),
+        [
+            ("192.0.2.1", 0x010200C0),
+            ("127.0.0.1", 0x0100007F),
+        ],
+    )
+    def test_text_from_network_order_round_trips(self, text: str, value: int) -> None:
+        """``ICMP_ECHO_REPLY.Address`` 的还原要与输入约定互逆（同一个坑的另一半）。"""
+        assert network_order_ipaddr(text) == value
+        assert text_from_network_order(value) == text
+
+    def test_zero_means_no_address(self) -> None:
+        assert text_from_network_order(0) is None
 
     def test_differs_from_host_order(self) -> None:
         assert network_order_ipaddr("192.0.2.1") != int(IPv4Address("192.0.2.1"))

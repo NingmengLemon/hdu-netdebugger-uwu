@@ -35,7 +35,7 @@ class ISPCheck(Checker):
 
         result = await self.session.ping(gateway)
         self.log(self.session.egress(gateway).describe())
-        self.log_lines(result.detail_lines())
+        self.log_ping_evidence(gateway, result)
 
         if result.all_succeeded:
             self.passed(f"{name}网关可达")

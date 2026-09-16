@@ -19,7 +19,7 @@ class SrunReachabilityCheck(Checker):
     async def check(self) -> None:
         result = await self.session.ping(SRUN_IP)
         self.log(self.session.egress(SRUN_IP).describe())
-        self.log_lines(result.detail_lines())
+        self.log_ping_evidence(SRUN_IP, result)
 
         if result.all_succeeded:
             self.passed("深澜认证服务器可达")

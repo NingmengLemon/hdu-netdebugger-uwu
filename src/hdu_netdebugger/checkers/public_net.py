@@ -21,7 +21,7 @@ class PublicNetCheck(Checker):
     async def check(self) -> None:
         result = await self.session.ping(ALI_DNS_IP)
         self.log(self.session.egress(ALI_DNS_IP).describe())
-        self.log_lines(result.detail_lines())
+        self.log_ping_evidence(ALI_DNS_IP, result)
 
         if result.all_succeeded:
             self.log("连接到阿里主DNS成功，公网可达。")

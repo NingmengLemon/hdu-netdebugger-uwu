@@ -32,7 +32,7 @@ $ hnd
 | 10 | 检查 BAS 可达性 | Ping `10.150.0.1`，不可达时进一步判断是否根本不在校园网 |
 | 15 | 检查生活区深澜认证可达性 | Ping 深澜认证服务器 `192.168.112.97` |
 | 20 | 检查 DNS 可用性 | 向 `210.32.32.1` 查询 `portal.hdu.edu.cn` 的 A 记录并校验返回值；同时用**系统解析器**再查一次，并检测本机 DNS 是否被接管 |
-| 25 | 检查认证状态 | 请求深澜 `rad_user_info`，解析在线设备、运营商、错误码 |
+| 25 | 检查认证状态 | 请求深澜 `rad_user_info`，解析在线设备、运营商、错误码；HTTPS 不通时回退明文 HTTP，并记录门户首页的跳转目标 |
 | 30 | 检查运营商网关可达性 | 依据上一步解析出的运营商 ID Ping 对应出口网关（联通 / 电信 / 移动） |
 | 35 | 检查公网可达性 | Ping 阿里 DNS `223.5.5.5` + HTTP 探测 `generate_204` |
 
@@ -56,6 +56,16 @@ $ hnd
 - **DNS 接管检测**：向一个不可路由的地址（RFC 5737 `192.0.2.53`）发同样的查询。
   如果它居然答得出来，说明本机 UDP/53 被本地接管（代理 / TUN 的 fake-IP），
   此时"校园 DNS 可用"这个结论不可能失败，属于假阳性 —— 实测本机正是如此。
+- **网卡的链路状态、协商速率与 MAC**：有线链路没建立时也会把该网卡打出来
+  （"网线插着但系统说没插"这类故障的唯一现场证据），并判断 MAC 是否为随机化地址
+  （IEEE 802 本地管理位）—— 校园网按 MAC 做无感知认证，随机 MAC 会导致频繁掉认证。
+- **ping 的回复 TTL 与来源**：由 TTL 估算跳数，并在回复来自非目标地址时告警。
+  实测在本机上，`ping -i 1`（TTL=1）对公网地址照样有回复、且 TTL 与正常请求一致 ——
+  这类"被中间层接管"的探测里，TTL 与来源是少数还能用的证据
+  （`icmplib` 后端拿不到 TTL，Windows `IcmpSendEcho` 与系统 `ping` 都能拿到）。
+- **认证接口的明文回退**：校园认证接口同时监听 80（官方给出的认证地址就是明文
+  `http://192.168.112.97`），因此 TLS / 代理把 HTTPS 弄坏时改走明文仍能读出认证状态；
+  另外还会记录门户首页跳向哪个页面（未认证跳登录页、已认证跳管理页）。
 
 ## 安装
 
@@ -263,7 +273,7 @@ uv run pytest
 - **[uv](https://docs.astral.sh/uv/)** — 依赖与虚拟环境管理
 - **[ruff](https://docs.astral.sh/ruff/)** — lint + format（替代 flake8 / black / isort），`select = ["ALL"]` + 逐条说明理由的 ignore
 - **[ty](https://docs.astral.sh/ty/)** — 类型检查（替代 mypy / pyright）
-- **pytest + pytest-asyncio + coverage** — 545 个用例，覆盖率门槛 80%（当前 ~95%）
+- **pytest + pytest-asyncio + coverage** — 580 个用例，覆盖率门槛 80%（当前 ~95%）
 
 所有网络调用都通过 `RunSession` 注入，因此**检查项**测试用
 `tests/fakes.py` 里的 `FakePinger` / `FakeHttp` 就能在毫秒内跑完 8 个检查项，
@@ -297,7 +307,7 @@ CI（`.github/workflows/ci.yml`）在 push / PR 时跑：
 
 | 平台 | 结果 |
 |------|------|
-| Windows 10 IoT 企业版 LTSC 19044（本机，杭电校园网生活区，电信出口） | `ruff` / `ty` 全绿；545 个用例中 544 通过、1 项平台跳过（覆盖率 ~95%）。8 项检查逐项可达：本机在路由器后且开着 Mihomo，`获取基本信息` / `检查代理状态` 按设计给出对隧道网卡的警告，其余 6 项通过 |
+| Windows 10 IoT 企业版 LTSC 19044（本机，杭电校园网生活区，电信出口） | `ruff` / `ty` 全绿；580 个用例中 579 通过、1 项平台跳过（覆盖率 ~95%）。8 项检查逐项可达：本机在路由器后且开着 Mihomo，`获取基本信息` / `检查代理状态` 按设计给出对隧道网卡的警告，其余 6 项通过 |
 | Debian 13 trixie x86_64（Python 3.13 宿主 / venv 3.12） | `ruff` / `ty` 全绿，完整测试套件通过（含离屏 GUI 与 QThread）；非 root 用户下 `SOCK_DGRAM` 非特权 ICMP 正常 |
 
 > macOS 分支（`ping -W <ms> -m <ttl>`）按 `ping(8)` 语义实现，参数拼装（含 BSD 的
@@ -313,7 +323,7 @@ CI（`.github/workflows/ci.yml`）在 push / PR 时跑：
 | `DnsClient` | `dnspython` 异步解析器，可指定 DNS 服务器 |
 | `HttpClient` | `httpx.AsyncClient`（默认不跟随重定向、不保留 Cookie） |
 | MVVM + Avalonia | Typer CLI（主）+ PySide6 可选 GUI |
-| 无测试 | 545 个 pytest 用例 + GitHub Actions CI |
+| 无测试 | 580 个 pytest 用例 + GitHub Actions CI |
 
 实现过程中还修正（或发现）了原版的几处问题：
 

@@ -69,6 +69,24 @@ class InterfaceInfo:
     dns_servers: tuple[str, ...] = ()
     #: 该接口是否启用 DHCP；非 Windows 或未知时为 ``None``
     dhcp_enabled: bool | None = None
+    #: 网卡物理地址（``aa:bb:cc:dd:ee:ff`` 形式）；拿不到时为 ``None``
+    mac: str | None = None
+
+    @property
+    def is_random_mac(self) -> bool:
+        """MAC 是否为"本地管理地址"（即系统随机化 MAC）。
+
+        判据是 IEEE 802 的 U/L 位：首字节的 bit 1 置位表示本地管理。Windows 的
+        "随机硬件地址"、手机的"随机 MAC"都会置这一位 —— 而杭电是按 MAC 做无感知
+        认证的，随机 MAC 会导致掉认证，管理员在群里两次把异常指向了这一点。
+        """
+        if not self.mac:
+            return False
+        first = self.mac.split(":", 1)[0]
+        try:
+            return bool(int(first, 16) & 0x02)
+        except ValueError:  # pragma: no cover - MAC 由我们自己格式化，理论上不会失败
+            return False
 
     @property
     def ipv4_addresses(self) -> tuple[IPv4Address, ...]:
@@ -118,6 +136,10 @@ class InterfaceInfo:
             f"DHCP: {dhcp}",
             f"默认网关: {self.gateway or '(无)'}",
             f"DNS 服务器: {', '.join(self.dns_servers) or '(无)'}",
+            f"链路: {'已建立' if self.is_up else '未建立'}"
+            + (f"，协商速率 {self.speed_mbps} Mbps" if self.speed_mbps else ""),
+            f"MAC: {self.mac or '(未知)'}"
+            + ("（本地管理/随机化地址）" if self.is_random_mac else ""),
             (
                 f"系统接口索引: {self.index if self.index is not None else '(未知)'}"
                 f" / MTU: {self.mtu if self.mtu is not None else '(未知)'}"

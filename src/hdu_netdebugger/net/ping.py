@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 from hdu_netdebugger.models.enums import PingStatus
 from hdu_netdebugger.models.ping import MultiPingResult, PingReply
-from hdu_netdebugger.net.winaddr import network_order_ipaddr
+from hdu_netdebugger.net.winaddr import network_order_ipaddr, text_from_network_order
 
 if TYPE_CHECKING:
     from typing import Protocol, Self
@@ -320,8 +320,17 @@ def _classify_windows_reply(
 
     status = int(reply_type.from_buffer(reply_buffer).Status)
     if status == _IP_SUCCESS:
-        rtt = float(reply_type.from_buffer(reply_buffer).RoundTripTime)
-        return PingReply(sequence=sequence, status=PingStatus.SUCCESS, rtt_ms=rtt)
+        reply = reply_type.from_buffer(reply_buffer)
+        rtt = float(reply.RoundTripTime)
+        return PingReply(
+            sequence=sequence,
+            status=PingStatus.SUCCESS,
+            rtt_ms=rtt,
+            # 回复报文的 IP 头信息就在 Options 里；TTL 是判断"这次 ICMP 有没有
+            # 被本地中间层接管"的少数可用证据（本机 TTL=1 探测照样有回复即为例）
+            ttl=int(reply.Options.Ttl) or None,
+            source=text_from_network_order(int(reply.Address)),
+        )
     if status == _IP_REQ_TIMED_OUT:
         return PingReply(sequence=sequence, status=PingStatus.TIMEOUT)
     if status in _IP_UNREACHABLE or status in _IP_TTL_EXPIRED:
@@ -409,7 +418,14 @@ def _icmplib_send_one(
         return PingReply(sequence=sequence, status=PingStatus.ERROR, error=str(exc))
 
     elapsed = (reply.time - request.time) * 1000
-    return PingReply(sequence=sequence, status=PingStatus.SUCCESS, rtt_ms=max(0.0, float(elapsed)))
+    return PingReply(
+        sequence=sequence,
+        status=PingStatus.SUCCESS,
+        rtt_ms=max(0.0, float(elapsed)),
+        # icmplib 的 ICMPReply 只暴露 source，**没有 TTL**（原始报文里其实有，
+        # 但它不往外给）；所以这条后端只贡献"回复来源"这一项证据
+        source=str(reply.source) if getattr(reply, "source", None) else None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -418,6 +434,10 @@ def _icmplib_send_one(
 
 #: 匹配 ``time=12ms`` / ``时间=1ms`` / ``time<1 ms`` / ``time=1.234 ms``
 _RTT_PATTERN = re.compile(r"[=<]\s*(\d+(?:\.\d+)?)\s*ms", re.IGNORECASE)
+#: 回复行里的 ``TTL=59`` / ``ttl=59``
+_TTL_PATTERN = re.compile(r"ttl[=:]\s*(\d+)", re.IGNORECASE)
+#: 回复行里第一个点分十进制地址就是回复来源（三种语言/平台都成立）
+_SOURCE_PATTERN = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b")
 
 
 def _decode_console_output(raw: bytes) -> str:
@@ -505,19 +525,28 @@ def _parse_system_ping(address: str, output: str, opts: PingOptions) -> MultiPin
 
     各平台 / 各语言环境下唯一稳定出现的是 ``TTL=`` 与 ``<数字> ms``，
     因此只能识别"收到回复"的行：成功包按出现顺序排列，其余位置补成超时。
-    这是兜底后端，精度低于前两个后端。
+    这是兜底后端，精度低于前两个后端 —— 但它反而**能拿到 TTL 与回复来源**
+    （icmplib 拿到来源却拿不到 TTL，Windows ``IcmpSendEcho`` 两样都有）。
     """
-    rtts: list[float] = []
+    replies: list[PingReply] = []
     for line in output.splitlines():
         if "ttl=" not in line.lower():
             continue
-        match = _RTT_PATTERN.search(line)
-        rtts.append(float(match.group(1)) if match else 0.0)
+        rtt_match = _RTT_PATTERN.search(line)
+        ttl_match = _TTL_PATTERN.search(line)
+        source_match = _SOURCE_PATTERN.search(line)
+        replies.append(
+            PingReply(
+                sequence=len(replies) + 1,
+                status=PingStatus.SUCCESS,
+                rtt_ms=float(rtt_match.group(1)) if rtt_match else 0.0,
+                ttl=int(ttl_match.group(1)) if ttl_match else None,
+                source=source_match.group(1) if source_match else None,
+            )
+        )
+        if len(replies) >= opts.count:
+            break
 
-    replies = [
-        PingReply(sequence=index + 1, status=PingStatus.SUCCESS, rtt_ms=rtt)
-        for index, rtt in enumerate(rtts[: opts.count])
-    ]
     replies.extend(
         PingReply(sequence=index + 1, status=PingStatus.TIMEOUT)
         for index in range(len(replies), opts.count)
