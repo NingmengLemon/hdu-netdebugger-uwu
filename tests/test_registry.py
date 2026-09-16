@@ -60,10 +60,11 @@ class TestBuiltinRegistry:
         "检查运营商网关可达性",
         "检查公网可达性",
         "检查路径MTU",
+        "检查IPv6",
     ]
     #: 前 8 项的 order 与原版一一对应（`-1/5/.../35` 是原版的执行顺序，不能改）；
     #: 本复刻新增的能力排在后面，避免插进原版序列里改变既有执行次序。
-    BUILTIN_ORDERS: ClassVar[list[int]] = [-1, 5, 10, 15, 20, 25, 30, 35, 37]
+    BUILTIN_ORDERS: ClassVar[list[int]] = [-1, 5, 10, 15, 20, 25, 30, 35, 37, 38]
     #: 原版 8 项的顺序（用于单独钉住"没有改动原版次序"）
     ORIGINAL_ORDERS: ClassVar[list[int]] = [-1, 5, 10, 15, 20, 25, 30, 35]
 

@@ -14,6 +14,7 @@ from hdu_netdebugger.checkers.auth import AuthCheck
 from hdu_netdebugger.checkers.bas import BASCheck
 from hdu_netdebugger.checkers.dns import DNSCheck
 from hdu_netdebugger.checkers.get_info import GetInfoCheck
+from hdu_netdebugger.checkers.ipv6 import V6_PROBE_TARGET, IPv6Check
 from hdu_netdebugger.checkers.isp import ISPCheck
 from hdu_netdebugger.checkers.mtu import MtuCheck
 from hdu_netdebugger.checkers.proxy import (
@@ -1449,6 +1450,90 @@ class TestMtuCheck:
         assert result.status is CheckResultStatus.WARN
         assert "无法进行路径 MTU 探测" in result.summary
         assert any("--ping-backend" in item for item in result.suggestions)
+
+
+class TestIPv6Check:
+    """IPv6：群日志里唯一有完整证据链的故障就在这一面。"""
+
+    @staticmethod
+    def _interface(*addresses: str) -> InterfaceInfo:
+        return InterfaceInfo(
+            name="以太网",
+            description="Realtek",
+            kind=InterfaceKind.ETHERNET,
+            is_up=True,
+            ipv4=("192.0.2.20",),
+            ipv6=addresses,
+        )
+
+    async def test_no_usable_ipv6_is_reported_as_not_applicable(self) -> None:
+        """只有链路本地与 Teredo 时要说"不适用"，而不是硬报一个失败（本机实测如此）。"""
+        session = make_session(
+            interfaces=[
+                self._interface(
+                    "fe80::1%15",
+                    "2001:0:14c9:d502:2cad:f749:8a6c:9b1e",
+                    "::1",
+                )
+            ]
+        )
+
+        result = await run_check(IPv6Check, session)
+
+        assert result.status is CheckResultStatus.PASS
+        assert "IPv6 相关故障不适用" in result.summary
+
+    async def test_global_ipv6_that_cannot_reach_the_internet_warns(self) -> None:
+        session = make_session(interfaces=[self._interface("2400:3200::abcd")])
+
+        result = await run_check(IPv6Check, session)
+
+        assert result.status is CheckResultStatus.WARN
+        assert any("v6 不通" in item for item in result.warnings) or ("v6 不通" in result.summary)
+
+    async def test_working_ipv6_passes_and_measures_mtu(self) -> None:
+        pinger = FakePinger()
+        pinger.set_reachable(V6_PROBE_TARGET)
+        pinger.set_mtu_edge(V6_PROBE_TARGET, MAX_PROBE_PAYLOAD)
+        session = make_session(
+            pinger=pinger,
+            interfaces=[self._interface("2400:3200::abcd")],
+        )
+
+        result = await run_check(IPv6Check, session)
+
+        assert result.status is CheckResultStatus.PASS
+        assert "IPv6 可用" in result.summary
+
+    async def test_campus_ula_counts_as_usable_and_is_labelled(self) -> None:
+        """手册给的校园 v6 是 FC01::/48（属 ULA），也算可用地址并标注。"""
+        pinger = FakePinger()
+        pinger.set_reachable(V6_PROBE_TARGET)
+        pinger.set_mtu_edge(V6_PROBE_TARGET, MAX_PROBE_PAYLOAD)
+        session = make_session(
+            pinger=pinger,
+            interfaces=[self._interface("fc01::1234")],
+        )
+
+        result = await run_check(IPv6Check, session)
+
+        assert "属校园 IPv6 网段" in (result.details or "")
+
+    async def test_v6_mtu_limit_is_warned(self) -> None:
+        """正是群日志里那次：1420 通、1428 全丢、收不到 ICMPv6 Type 2。"""
+        pinger = FakePinger()
+        pinger.set_reachable(V6_PROBE_TARGET)
+        pinger.set_mtu_edge(V6_PROBE_TARGET, 1420)
+        session = make_session(
+            pinger=pinger,
+            interfaces=[self._interface("2400:3200::abcd")],
+        )
+
+        result = await run_check(IPv6Check, session)
+
+        assert result.status is CheckResultStatus.WARN
+        assert any("IPv6 路径 MTU 受限" in item and "1420" in item for item in result.warnings)
+        assert any("ICMPv6 Type 2" in item for item in result.suggestions)
 
 
 class TestProxyCheck:

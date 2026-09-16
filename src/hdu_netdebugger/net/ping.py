@@ -477,7 +477,7 @@ def _decode_console_output(raw: bytes) -> str:
 
 async def _system_ping(address: str, opts: PingOptions) -> MultiPingResult:
     """调用系统 ``ping`` 命令并解析输出。"""
-    args = ["ping", *_system_ping_args(address, opts)]
+    args = [_system_ping_command(address), *_system_ping_args(address, opts)]
     try:
         process = await asyncio.create_subprocess_exec(
             *args,
@@ -500,21 +500,31 @@ async def _system_ping(address: str, opts: PingOptions) -> MultiPingResult:
     return _parse_system_ping(address, _decode_console_output(stdout), opts)
 
 
+def _system_ping_command(address: str) -> str:
+    """按地址族选命令名：macOS 的 IPv6 ping 是独立的 ``ping6``。"""
+    if sys.platform == "darwin" and _address_is_v6(address):
+        return "ping6"
+    return "ping"
+
+
+def _address_is_v6(address: str) -> bool:
+    """地址是不是 IPv6（解析不了就当 IPv4 处理，交给 ping 自己报错）。"""
+    try:
+        return ip_address(address).version == 6
+    except ValueError:
+        return False
+
+
 def _system_ping_args(address: str, opts: PingOptions) -> list[str]:
     """按平台拼装 ``ping`` 参数。"""
     timeout_ms = max(1, round(opts.timeout_s * 1000))
     if sys.platform == "win32":
-        args = [
-            "-n",
-            str(opts.count),
-            "-w",
-            str(timeout_ms),
-            "-l",
-            str(opts.payload_size),
-            "-i",
-            str(opts.ttl),
-        ]
-        if opts.dont_fragment:
+        args = ["-n", str(opts.count), "-w", str(timeout_ms)]
+        if _address_is_v6(address):
+            args.append("-6")  # 显式走 IPv6 栈（Windows 也能自动识别，写出来更明确）
+        args.extend(["-l", str(opts.payload_size), "-i", str(opts.ttl)])
+        if opts.dont_fragment and not _address_is_v6(address):
+            # IPv6 里没有 DF 这个概念（PMTUD 是强制的），给了会被 ping 拒绝
             args.append("-f")
         return [*args, address]
     if sys.platform == "darwin":
@@ -550,6 +560,23 @@ def _system_ping_args(address: str, opts: PingOptions) -> list[str]:
     return [*args, address]
 
 
+def _looks_like_a_reply(line: str, *, is_v6: bool) -> bool:
+    """判断这一行是不是"收到回复"的行。
+
+    IPv4 用 ``TTL=`` 当锚点（各平台各语言都有）。**IPv6 没有 TTL** —— 实测 Windows 的
+    v6 回复长这样::
+
+        Reply from ::1: time<1ms
+
+    所以 v6 改用 ``from`` / ``来自`` 当锚点，同时避开统计行
+    （``Minimum = 0ms`` 也带 ``=``，但没有 "from"）。
+    """
+    if is_v6:
+        lowered = line.lower()
+        return ("from" in lowered or "来自" in line) and bool(_RTT_PATTERN.search(line))
+    return "ttl=" in line.lower()
+
+
 def _parse_system_ping(address: str, output: str, opts: PingOptions) -> MultiPingResult:
     """把 ``ping`` 的文本输出还原成逐包结果。
 
@@ -559,8 +586,9 @@ def _parse_system_ping(address: str, output: str, opts: PingOptions) -> MultiPin
     （icmplib 拿到来源却拿不到 TTL，Windows ``IcmpSendEcho`` 两样都有）。
     """
     replies: list[PingReply] = []
+    is_v6 = _address_is_v6(address)
     for line in output.splitlines():
-        if "ttl=" not in line.lower():
+        if not _looks_like_a_reply(line, is_v6=is_v6):
             continue
         rtt_match = _RTT_PATTERN.search(line)
         ttl_match = _TTL_PATTERN.search(line)

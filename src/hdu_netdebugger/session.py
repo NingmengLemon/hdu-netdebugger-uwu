@@ -146,6 +146,25 @@ class RunSession:
             return Backend.WINDOWS_ICMP if sys.platform == "win32" else Backend.SYSTEM
         return self.ping_backend
 
+    async def ping_v6(self, target: object, size: int | None = None) -> MultiPingResult:
+        """Ping 一个 IPv6 目标。
+
+        固定走**系统 ping**：三个平台的 ``ping -6`` / ``ping6`` 都能用，而且它的输出里
+        能拿到 TTL（Linux）与回复来源；``icmplib`` 虽然在 v6 上也能发包，但拿不到这些。
+        ``size`` 给定时按 MTU 探测的预算来（发 1 个包、超时更短）。
+
+        IPv6 没有 DF 这个概念（PMTUD 是强制的），所以这里不做 DF 切换。
+        """
+        options = self.ping_options
+        if size is not None:
+            options = replace(
+                options,
+                payload_size=size,
+                count=MTU_PROBE_COUNT,
+                timeout_s=min(options.timeout_s, MTU_PROBE_TIMEOUT_S),
+            )
+        return await self._pinger(str(target), options, backend=Backend.SYSTEM)
+
     def egress(self, target: object) -> Egress:
         """查这次探测从哪个接口出去（校园网里这条证据经常比"通不通"更关键）。
 

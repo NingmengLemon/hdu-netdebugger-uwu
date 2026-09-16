@@ -198,6 +198,18 @@ CHINESE_OUTPUT = (
     "来自 10.150.0.1 的回复: 字节=32 时间=3ms TTL=64\n"
 )
 TIMEOUT_OUTPUT = "Request timed out.\nRequest timed out.\n"
+#: 实测的 Windows IPv6 ping 输出（本机 `ping -6 ::1` 抓的）：**回复行没有 TTL**
+WINDOWS_V6_OUTPUT = (
+    "\n"
+    "Pinging ::1 with 32 bytes of data:\n"
+    "Reply from ::1: time<1ms \n"
+    "Reply from ::1: time<1ms \n"
+    "\n"
+    "Ping statistics for ::1:\n"
+    "    Packets: Sent = 2, Received = 2, Lost = 0 (0% loss),\n"
+    "Approximate round trip times in milli-seconds:\n"
+    "    Minimum = 0ms, Maximum = 0ms, Average = 0ms\n"
+)
 
 
 class TestSystemPingParsing:
@@ -263,6 +275,42 @@ class TestSystemPingParsing:
         result = ping_module._parse_system_ping("1.1.1.1", LINUX_OUTPUT, PingOptions(count=2))
         assert [reply.ttl for reply in result.replies] == [57, 57]
         assert result.replies[0].source == "1.1.1.1"
+
+    def test_ipv6_output_has_no_ttl_but_is_still_counted(self) -> None:
+        """IPv6 的回复行里**没有 TTL**（实测 Windows 输出），不能因此全判成超时。"""
+        result = ping_module._parse_system_ping("::1", WINDOWS_V6_OUTPUT, PingOptions(count=2))
+
+        assert result.success_count == 2
+        # `time<1ms` 按 1ms 计（与 IPv4 侧同一套解析，宁可略高也不要报 0）
+        assert [reply.rtt_ms for reply in result.replies] == [1.0, 1.0]
+        assert result.replies[0].ttl is None
+
+    def test_ipv6_summary_lines_are_not_replies(self) -> None:
+        """统计行里也有 `= 0ms`，不能把它当成回复（否则成功率虚高）。"""
+        result = ping_module._parse_system_ping("::1", WINDOWS_V6_OUTPUT, PingOptions(count=4))
+
+        assert result.success_count == 2, "只有两行真正的回复"
+        assert result.total_count == 4
+
+    def test_ipv6_timeouts_are_reported(self) -> None:
+        output = (
+            "Pinging 2400:3200::1 with 32 bytes of data:\nRequest timed out.\nRequest timed out.\n"
+        )
+        result = ping_module._parse_system_ping("2400:3200::1", output, PingOptions(count=2))
+        assert result.success_count == 0
+
+    def test_ipv6_uses_ping6_on_macos(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "platform", "darwin")
+        assert ping_module._system_ping_command("2400:3200::1") == "ping6"
+        assert ping_module._system_ping_command("1.1.1.1") == "ping"
+
+    def test_ipv6_arguments_do_not_set_df(self) -> None:
+        """IPv6 没有 DF（PMTUD 是强制的），给了会被 ping 拒绝。"""
+        opts = PingOptions(count=1, payload_size=1400, dont_fragment=True)
+        args = ping_module._system_ping_args("2400:3200::1", opts)
+        assert "-6" in args
+        assert "-f" not in args
+        assert "2400:3200::1" in args
 
 
 class TestSystemPingArgs:
