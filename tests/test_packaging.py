@@ -140,19 +140,26 @@ def collected_test_count() -> int:
     return int(match.group(1))
 
 
-def test_readme_test_count_matches_reality() -> None:
-    """README 里的用例数必须等于实际收集到的数量.
+def test_docs_test_count_matches_reality() -> None:
+    """README 与 docs/ 里出现的用例数都必须等于实际收集到的数量.
 
-    这个数字已经漂过两次（380 → 470 → 487），所以做成闸门而不是靠"记得改"：
-    凡是 README 里出现的"<数字> [pytest] 用例"都必须一致且正确。
+    这个数字已经漂过好几次（380 → 470 → 487 → …），所以做成闸门而不是靠"记得改"：
+    凡是文档里出现的"<数字> [pytest] 用例"都必须一致且正确。文档拆到 docs/ 之后，
+    这里改成**扫描 README.md 与 docs/ 下所有 md**，免得数字在某一处悄悄过期。
     """
     actual = collected_test_count()
-    stated = {
-        int(item)
-        for item in re.findall(
-            r"(\d+)\s*个\s*(?:pytest\s*)?用例", README.read_text(encoding="utf-8")
-        )
-    }
+    documents = [README, *sorted((ROOT / "docs").glob("*.md"))]
+    stated: dict[str, set[int]] = {}
+    for document in documents:
+        found = {
+            int(item)
+            for item in re.findall(
+                r"(\d+)\s*个\s*(?:pytest\s*)?用例", document.read_text(encoding="utf-8")
+            )
+        }
+        if found:
+            stated[document.name] = found
 
-    assert stated, "README 里没找到'<数字> 个用例'的说法（是不是改了措辞？）"
-    assert stated == {actual}, f"README 写的是 {sorted(stated)}，实际收集到 {actual}"
+    assert stated, "文档里没找到'<数字> 个用例'的说法（是不是改了措辞？）"
+    wrong = {name: sorted(values) for name, values in stated.items() if values != {actual}}
+    assert not wrong, f"这些文档写的用例数与实际（{actual}）不符: {wrong}"

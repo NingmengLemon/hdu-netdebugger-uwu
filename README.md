@@ -3,13 +3,13 @@
 > 杭州电子科技大学校园网诊断工具 —— [HDU-ICU/HDU_NetDebugger](https://github.com/HDU-ICU/HDU_NetDebugger) 的 Python 复刻版。
 > **CLI 优先**，另提供 PySide6 可选 GUI。
 
-一键跑完 8 项网络体检，逐项给出 **状态 / 总览 / 警告 / 建议 / 详细日志**，并可导出 Markdown 或 JSON 报告，
-方便直接贴给 ICU（网络中心）排查。
+一键跑完 11 项网络体检，逐项给出 **状态 / 总览 / 警告 / 建议 / 详细日志**，并可导出 Markdown
+或 JSON 报告，方便直接贴给 ICU（网络中心）排查。
 
 ```text
 $ hnd
 ╭──────────────────────── HDU Net Debugger ────────────────────────╮
-│ 检查时间 2025-01-01 12:00:00            共 8 项 · 通过 6 · 警告 1 · 失败 1 │
+│ 检查时间 2025-01-01 12:00:00     共 11 项 · 通过 7 · 警告 3 · 失败 1 │
 ╰──────────────────────────────────────────────────────────────────╯
  ✔ 获取基本信息              检测到生活区网络
  ✔ 检查代理状态              未检测到代理配置
@@ -19,167 +19,43 @@ $ hnd
  ✔ 检查认证状态              认证状态正常
  ✔ 检查运营商网关可达性        中国电信网关可达
  ✖ 检查公网可达性             公网不可达
+ …
 ```
 
-## 功能
+## 检查项
 
-复刻自 C#/Avalonia 原版的全部检查项，按 `order` 顺序执行：
+| # | 检查项 | 一句话 |
+|---|--------|--------|
+| -1 | 获取基本信息 | 枚举网卡、识别生活区 / 教学区 / eduroam 网段、解释异常网段、嗅探 VPN / Tunnel |
+| 5 | 检查代理状态 | 系统代理与 `HTTP_PROXY` / `HTTPS_PROXY` 等环境变量代理 |
+| 10 | 检查 BAS 可达性 | Ping 生活区 BAS，不可达时判断是否根本不在校园网 |
+| 15 | 检查生活区深澜认证可达性 | Ping 深澜认证服务器 |
+| 20 | 检查 DNS 可用性 | 校验校园 DNS 的解析结果，并用系统解析器对照、检测本机 DNS 接管 |
+| 25 | 检查认证状态 | 读深澜 `rad_user_info`：在线设备、运营商、错误码、会话与配额 |
+| 30 | 检查运营商网关可达性 | 按运营商逐个探测候选出口网关 |
+| 35 | 检查公网可达性 | 双锚点 Ping + HTTP 探针，识别门户劫持 |
+| 37 | 检查路径 MTU | DF 二分探测，识别"小包通、大包不通"（**新增**） |
+| 38 | 检查 IPv6 | 有没有可用的 v6 地址、能否出网、v6 路径 MTU（**新增**） |
+| 39 | 检查逐跳路径 | 指出断点在第几跳；有 TUN 时直接放弃（**新增**） |
 
-| # | 检查项 | 说明 |
-|---|--------|------|
-| -1 | 获取基本信息 | 枚举活动网卡，识别**生活区**（`10.150.0.0/16`）/ **教学区**（`10.249.0.0/16`）/ **eduroam**（`10.252.0.0/16`），单独解释 `169.254/16`、`192.168/16`、`10.230/16` 三类异常网段，并嗅探 VPN / Tunnel 网卡 |
-| 5 | 检查代理状态 | 检测系统代理与 `HTTP_PROXY` / `HTTPS_PROXY` 等环境变量代理 |
-| 10 | 检查 BAS 可达性 | Ping `10.150.0.1`，不可达时进一步判断是否根本不在校园网；教学区场景下本项仅作参考（手册未给教学区测试点） |
-| 15 | 检查生活区深澜认证可达性 | Ping 深澜认证服务器 `192.168.112.97` |
-| 20 | 检查 DNS 可用性 | 向 `210.32.32.1` 查询 `portal.hdu.edu.cn` 的 A 记录并校验返回值；同时用**系统解析器**再查一次，并检测本机 DNS 是否被接管 |
-| 25 | 检查认证状态 | 请求深澜 `rad_user_info`，解析在线设备、运营商、错误码；HTTPS 不通时回退明文 HTTP，并记录门户首页的跳转目标 |
-| 30 | 检查运营商网关可达性 | 依据上一步解析出的运营商 ID Ping 候选出口网关（**候选逐个试，谁应答就报谁**） |
-| 35 | 检查公网可达性 | Ping 阿里 DNS `223.5.5.5`（并用腾讯 DNS 交叉验证）+ HTTP 探测 `generate_204` |
-| 37 | 检查路径 MTU | 用 DF 探测校园与公网目标的路径 MTU，识别"小包通、大包不通"（**本复刻新增**，原版没有） |
-| 38 | 检查 IPv6 | 判断本机有没有可用的 v6 地址、能否出网，可用时再测 v6 路径 MTU（**本复刻新增**） |
-| 39 | 检查逐跳路径 | 逐 TTL 探测，指出断点在第几跳；**有 TUN 时直接放弃**（那种环境下跳数是伪造的） |
+原版 8 项的执行次序原样保留，新增的 3 项排在后面。每项的判据、实测证据、以及与 ICU
+官方手册的核对结果见 **[docs/checks.md](docs/checks.md)**。
 
-检查之间存在**依赖**：例如 DNS 不可用时会自动改用 IP 直连请求认证接口，运营商 ID 无效时
-"运营商网关可达性"会被标记为 `跳过` 而不是失败。
-
-### 与官方手册的核对
-
-`references/icu_manual`（`HDU-ICU/manual-dist`，v0.0.17）是权威来源，但它**停在 2025-04**
-（正文自述"信息更新时间 2025 年 04 月"），而 `dist/network/troubleshooting.html` 只有一句
-"文档建设中" —— 也就是说**官方没有可对照的排查流程**。本次核出并处理了这些：
-
-- **运营商网关有两处硬冲突**：手册说电信 BRAS 是 `183.157.176.1`、联通是 `221.12.1.227`，
-  而原版用的 `60.176.40.1` / `172.20.64.1` 在手册里属于"出口公网网段"（疑似把网段当网关）。
-  两边都可能过时，所以改成**候选列表逐个探测**：谁应答就报谁，并把"实际应答的地址与手册/原版
-  不一致"写进建议 —— 那本身就是可回报给 ICU 的证据。
-- **补上手册里的网段**：eduroam `10.252.0.0/16`（原版会误判"未检测到校园网地址"），
-  以及三类异常网段各自给独立解释（`169.254/16` = DHCP 失败、`192.168/16` = 路由器私网、
-  `10.230/16` = 手册列为异常）。
-- **没有证据的网段不进默认值**：曾在本机看到过 `10.151.x.x` 的残留租约，但那来自一块
-  **已断开**的网卡、且无法确认为校园网段，所以不写进常量；改用 `--campus-network CIDR`
-  让使用者自己声明（会被标成"自定义校园网段"并提示可反馈补进默认值）。
-- **教学区的 BAS 假失败**：`10.150.0.1` 只对生活区成立，手册也未给教学区测试点，
-  因此教学区场景下本项降级为"仅供参考"而不是失败。
-- 手册**没有涉及**的东西（逐串搜索 0 命中，别再等它）：`rad_user_info`、自助服务端口
-  `8800`、`223.5.5.5`、`generate_204`、MTU/PMTUD、802.1x、设备数上限，以及
-  **Apple / iOS / macOS 一个字都没有** —— 那些只能靠实测。
-
-### 后续计划与待确认项
-
-按证据强度排序，**以下都还没做**（属于原有 8 项检查之外的新能力）：
-
-1. **Wi-Fi 状态**：SSID / 信号 / 频段。手册给出至少 `i-HDU` 与 `eduroam` 两个 SSID；
-   实现要注意 `netsh` 输出是 OEM 编码（项目里已有 OEM 解码先例）。
-2. **IPv6 那一路的验证**：检查 38 的"没有可用 v6 地址"分支已在真机验证（本机只有链路
-   本地 + Teredo），但**"有 v6 地址"的正向分支在本网无法验证** —— 本机既没有全局 IPv6，
-   也没有校园 v6 出口。等到能连 v6 的环境再跑一遍，别把未验证的路径当成已验证。
-3. **教学区 / Linux 的实机覆盖**：现有验证都在同一台 Windows 机器上做的。教学区的
-   BAS / 认证测试点、Linux 上的系统 ping 解析与 `ping -M do`（路径 MTU 用）都还等着
-   真机跑一遍 —— 这类"换平台就走的另一条代码路径"最容易藏问题。
-
-待确认的时效性事实（**别当现状**；拿到权威口径后改常量并补测试）：
-
-- `10.151.x` 是否属于校园网段（只在已断开网卡上见过一次残留租约，见上文）；
-- 自助服务 `:8800` 端口是否仍在使用；
-- 联通 `221.12.1.227` 到底是 BRAS 还是城域网 DNS（手册里两处自相矛盾）；
-- 教学区的 BAS / 认证测试点（手册写"各教学楼有线地址待补充"，目前教学区本项仅供参考）；
-- 运营商网关候选里到底哪个是对的（工具改成"谁应答就报谁"，实测能反映现状，但缺权威口径）；
-- IPv6 在有 v6 的网段上表现如何（含群日志里 1420 通 / 1428 丢那一类）。
-
-### 比原版多做的诊断
-
-"通不通"之外，本复刻还会把**能定位故障的证据**一并打出来（都在 `-v` 的详细日志里）：
-
-- **探测出站归属**：本工具的 ping 到底从哪张网卡出去。装了代理 / VPN 的机器上，
-  TUN 会以更低的 metric 抢走默认路由，于是所有探测都从隧道出去 —— 那时"BAS 可达"
-  并不代表校园物理链路可达。检查 1 会列出**全部 IPv4 默认路由**（多条 `0.0.0.0/0`
-  同时存在正是这种竞争的直接证据），再逐目标给出实际出口接口 / 下一跳 / metric，
-  并在被隧道接管时明确警告。实测本机：三条默认路由（以太网 / WLAN / Mihomo），
-  而校园 BAS、深澜、阿里 DNS 的出口全是 `Mihomo（ifIndex 75，metric 0）`。
-- **IP 配置证据**：每个接口的 DHCP 状态、默认网关、系统配置的 DNS、系统接口索引与 MTU。
-  排查校园网的第一步通常就是"这台机器到底拿到 IP 没有、网关和 DNS 是不是校园的"。
-- **系统解析器对比**：除了问校园 DNS，还用系统配置的解析器解析同一个域名。
-  "能连上认证服务器 IP、却打不开 portal 域名"是最常见的一类故障，
-  而只测校园 DNS 回答不了这个问题。
-- **DNS 接管检测**：向一个不可路由的地址（RFC 5737 `192.0.2.53`）发同样的查询。
-  如果它居然答得出来，说明本机 UDP/53 被本地接管（代理 / TUN 的 fake-IP），
-  此时"校园 DNS 可用"这个结论不可能失败，属于假阳性 —— 实测本机正是如此。
-- **网卡的链路状态、协商速率与 MAC**：有线链路没建立时也会把该网卡打出来
-  （"网线插着但系统说没插"这类故障的唯一现场证据），并判断 MAC 是否为随机化地址
-  （IEEE 802 本地管理位）—— 校园网按 MAC 做无感知认证，随机 MAC 会导致频繁掉认证。
-- **ping 的回复 TTL 与来源**：由 TTL 估算跳数，并在回复来自非目标地址时告警。
-  实测在本机上，`ping -i 1`（TTL=1）对公网地址照样有回复、且 TTL 与正常请求一致 ——
-  这类"被中间层接管"的探测里，TTL 与来源是少数还能用的证据
-  （`icmplib` 后端拿不到 TTL，Windows `IcmpSendEcho` 与系统 `ping` 都能拿到）。
-- **认证接口的明文回退**：校园认证接口同时监听 80（官方给出的认证地址就是明文
-  `http://192.168.112.97`），因此 TLS / 代理把 HTTPS 弄坏时改走明文仍能读出认证状态；
-  另外还会记录门户首页跳向哪个页面（未认证跳登录页、已认证跳管理页）。
-- **深澜响应里的会话与配额**：在线时长、最近一次保活、本次与累计流量、余量、拨号方式、
-  认证服务端版本，以及"在线设备地址是否就在本机网卡上"（判断认证的是本机，还是路由器 /
-  NAT 后面的另一台设备）。这些字段解析器一直在解析（对应原版的 `SrunAuthResponse`）
-  却没人看，而"认证正常但上不了网"里它们往往正是关键。
-  **身份字段（`user_name` / `user_mac` / `phone` / `email` / `real_name`）一律不打印**，
-  并有单测守着这条边界。
-- **公网锚点交叉验证**：除了阿里 DNS，再 Ping 一个异构的公共 DNS（腾讯 `119.29.29.29`）。
-  群体反馈里出现过"`223.5.5.5` 本身也会被劫持 / 限速"，单锚点既可能假通也可能假不通；
-  两个锚点结论不一致时会明确说明，最终结论仍以 HTTP 探针为准。
-  第二个锚点是**实测挑的**：`114.114.114.114` 在本网 ICMP 被过滤（0/2 应答），
-  选它会导致每次运行都误报"锚点不一致"。
-- **路径 MTU（检查 37）**：`ping` 默认只发 32 字节，所以"能 ping 通"不代表大包能过。
-  本项用 DF 逐个尺寸二分探测，并区分两种形态：中间设备回了 ICMP"需要分片"（只是 MTU 偏小）
-  与**全程没有任何回执**（静默丢弃，也就是 MTU 黑洞形态）。实测（关掉 TUN、
-  经 宿舍路由器走寝室网）：BAS 与公网对照之外，**校园深澜认证服务器 996 字节以上全丢
-  （≈ MTU 1024）、且从不回"需要分片"**；同一时刻 BAS 能过 1472、公网 DF 上限 1456（≈1484）。
-  这正是"能上 QQ 却打不开网页"的一类成因，而原版完全无法表达它。
-- **IPv6（检查 38）**：本机有没有**可用**的 v6 地址（链路本地 / Teredo / ULA / 全局分开算）、
-  能不能出网、可用时再测 v6 的路径 MTU。做这一项是因为群里唯一有完整证据链的故障就在 v6 上
-  （生活区 IPv6 PMTUD 黑洞：1420 通、1428 全丢、收不到 ICMPv6 Type 2），而当时 IPv4 全绿。
-  实测还抓到一个解析坑：**Windows 的 v6 回复行里没有 `TTL=`**，原有解析器会把它们全判成
-  超时，所以 v6 改用 `from` / `来自` 当锚点，并避开带 `=` 的统计行。
-- **逐跳路径（检查 39）**：回答"断点在第几跳"——"能到路由器、到不了 BAS"与"能到 BAS、
-  到不了深澜"是完全不同的两类故障。**有 TUN 时本项直接放弃**：那种环境下 `tracert`
-  给出的跳数是伪造的（实测到公网目标只显示 1 跳），与其给好看的假跳数，不如说清不成立。
-  两个实现细节也是实测逼出来的：Windows 上不用 `tracert`（每跳发 3 个探针、且实测 `-w`
-  被忽略，8 跳要 11 秒），改用**我们自己的逐 TTL ICMP 探测**（每跳 1 个包，同一路径
-  1-2 秒，且不解析本地化文本）；并且"跳数没到目标"与"目标不可达"分开判 ——
-  沿途设备不回 TTL 超时很常见，那时目标照样可达，不算故障。
-
-## 安装
+## 快速开始
 
 需要 Python ≥ 3.12 与 [uv](https://docs.astral.sh/uv/)。
 
 ```bash
 git clone <repo> && cd Hdu_netDebugger_Uwu
+uv sync --no-default-groups      # 只要 CLI；用 GUI 换成 uv sync --extra gui
 
-# 只要 CLI 运行环境：不装 dev 工具链，也不装 PySide6
-uv sync --no-default-groups
-
-# 想直接用 GUI
-uv sync --extra gui
-
-# 开发：lint / 类型检查 / 完整测试套件
-uv sync --all-groups
-```
-
-> `test` 依赖组里包含 PySide6 —— 完整测试套件要跑离屏 GUI 用例，缺了它覆盖率门槛
-> 会以"门槛不达标"的假象失败，所以让它跟着 `uv sync` 一起装上；只要 CLI 运行环境时
-> 用上面的 `--no-default-groups`。
-
-## 使用
-
-### CLI
-
-```bash
-uv run hnd                      # 跑完整套检查（等价于原版「开始测试」）
-uv run hnd run                  # 同上，显式子命令
-uv run hnd run --json           # 机器可读输出（适合脚本 / CI）
-uv run hnd run -o report.md     # 导出 Markdown 报告
-uv run hnd run -v               # 打印每一项的详细日志
-uv run hnd run --only 检查DNS可用性 --only 检查认证状态
-uv run hnd run --skip 检查公网可达性
-uv run hnd list                 # 列出所有已注册的检查项
-uv run hnd doctor               # 自检：运行环境、依赖、权限
-uv run hnd gui                  # 启动 PySide6 图形界面
+uv run hnd                       # 跑完整套检查（等价于原版「开始测试」）
+uv run hnd run --json            # 机器可读输出
+uv run hnd run -o report.md      # 导出 Markdown 报告
+uv run hnd run -v                # 打印每一项的详细日志与证据
+uv run hnd list                  # 列出所有检查项
+uv run hnd doctor                # 自检：运行环境、依赖、Ping 后端
+uv run hnd gui                   # 启动图形界面
 ```
 
 `hdu-netdebugger` 是 `hnd` 的等价长命令。
@@ -188,229 +64,68 @@ uv run hnd gui                  # 启动 PySide6 图形界面
 
 | 参数 | 说明 |
 |------|------|
-| `--only` / `--skip` | 按名称（支持前缀/模糊匹配）筛选检查项，可重复 |
+| `--only` / `--skip` | 按名称（支持前缀 / 模糊匹配）筛选检查项，可重复 |
 | `-f, --format {text,json,md}` | 输出格式，默认 `text` |
 | `-o, --output PATH` | 写入文件；`-` 表示 stdout |
 | `-v, --verbose` | 输出每一项的详细日志 |
-| `--timeout SEC` | 单次 Ping 超时（默认 `1.0`） |
-| `--ping-count N` | 每个目标 Ping 次数（默认 `4`） |
-| `--insecure` | 跳过 TLS 证书校验（校园网自签证书场景） |
-| `--no-env-proxy` | 本次运行忽略 `HTTP_PROXY` / `HTTPS_PROXY` 等环境变量代理（系统代理仍会检测并提示） |
+| `--timeout SEC` / `--ping-count N` | 单次 Ping 超时（默认 `1.0`）/ 次数（默认 `4`） |
+| `--ping-backend NAME` | `auto` / `icmplib` / `windows-icmp` / `system` |
 | `--dns-server IP` | 覆盖查询用的 DNS 服务器 |
-| `--campus-network CIDR` | 把该网段也当作校园网（可重复）。校园网拓扑会变而参考资料都可能是旧的，确认过的新网段用它加上即可，检查 1 会把它标成"自定义校园网段" |
+| `--campus-network CIDR` | 把该网段也当作校园网（可重复）；校园网拓扑会变，确认过的新网段用它加上即可 |
+| `--insecure` / `--no-env-proxy` | 跳过 TLS 校验 / 忽略环境变量代理 |
 
 退出码：`0` 全部通过 · `1` 存在警告 · `2` 存在失败 · `3` 工具自身错误（含参数写错等用法错误）。
 可直接用于 CI / 脚本：结果码与"调用错误"不撞码。
 
 > 直接敲 `hnd`（一个参数都不给）时，检查结束会**停一下等按键**再退出 —— 双击 exe 的同学
-> 不会看到黑窗口一闪而过、连结论都没看清。只要带了任何参数（`hnd --json`、`hnd list`、
-> `hnd -h`…）就不会停；stdin 不是终端（管道/重定向）时也不会停。等待上限 120 秒，
-> 避免在非交互场景里永久挂住。
+> 不会看到黑窗口一闪而过。带了任何参数、或 stdin 不是终端时都不会停；等待上限 120 秒。
 
-### GUI
+## GUI
 
 ```bash
 uv run hnd gui
-# 或
-uv run python -m hdu_netdebugger.gui
 ```
 
 ![GUI 截图](docs/assets/screenshot.png)
 
-> 截图取自本机一次真实运行（v0.1.0，生活区网段 + 电信出口）：6 项通过、2 项警告
-> —— 警告来自 MIHOMO 隧道网卡与"在路由器后使用"这两个按设计给出的提示。
+> 截图取自一次真实运行（v0.1.0，生活区网段 + 电信出口）：警告来自代理的隧道网卡与
+> "在路由器后使用"这两个**按设计给出**的提示，不是故障。
 
-图形界面复刻原版交互：顶部「开始测试 / 导出结果」，下面是一列可展开的检查卡片，
-图标按状态着色（灰=未检查、蓝=进行中、绿=通过、黄=警告、红=失败、橙=跳过，
-跳过用橙色是为了与"未检查"的灰区分开，与原版一致），失败与警告项会自动展开。
-检查在独立 `QThread` 里运行，界面不会卡死；关闭窗口会协作式取消未开始的检查，
-等线程真正退出后再关，不阻塞界面。
-
-无显示环境（CI / 远程）下可以用离屏渲染验证界面：
-
-```bash
-uv run python scripts/gui_render_sample.py out.png      # 用固定样本渲染
-uv run python scripts/gui_smoke.py out.png              # 真跑一轮检查再截图
-```
-
-> `offscreen` 平台插件不接系统字体库，而 PySide6 6.11 起不再随附字体，
-> 因此在没有额外装字体的机器上截出来的文字全是豆腐块（脚本会给出显式告警）：
-> 那种截图只能核对布局与配色，别用它核对文字。Linux CI 会先装 `fonts-wqy-zenhei`。
+复刻原版交互：顶部「开始测试 / 导出结果」，下面是一列可展开的检查卡片，图标按状态着色
+（跳过用橙色，与"未检查"的灰区分开，与原版一致），失败与警告项自动展开。检查跑在独立
+`QThread` 里，关窗走协作式异步关闭，不会卡界面也不会硬杀线程。
 
 ## 打包成可执行文件
 
-给不想装 Python 的同学用：CLI 与 GUI 各打成一个**目录式**（onedir）产物。
-
 ```bash
-uv run --group build pyinstaller --clean --noconfirm packaging/hnd.spec
-# 或
-make exe                                      # Windows： pwsh -File scripts/tasks.ps1 exe
+make exe                                 # 或 uv run --group build pyinstaller --clean --noconfirm packaging/hnd.spec
+uv run python scripts/dist_smoke.py      # 打完必须跑一遍产物自检
 ```
 
-| 产物 | 子系统 | 形态 | 说明 |
-|------|--------|------|------|
-| `dist/hnd.exe`（Linux/macOS 下是 `dist/hnd`） | 控制台 | onefile | CLI；排除了 PySide6；**单文件 14 MB**，发一个文件就能用 |
-| `dist/HDU-NetDebugger/` | 窗口 | onedir | GUI，带 Qt，约 121 MB |
-| `dist/hnd-gui-smoke/` | 控制台 | onedir | 只给 CI 用：冻结 `scripts/gui_smoke.py`，证明打进包里的 Qt 能用 |
+| 产物 | 形态 | 说明 |
+|------|------|------|
+| `dist/hnd.exe`（Linux/macOS 下是 `dist/hnd`） | onefile | CLI，单文件 14 MB，排除了 PySide6 |
+| `dist/HDU-NetDebugger/` | onedir | GUI，带 Qt，约 121 MB |
+| `dist/hnd-gui-smoke/` | onedir | 只给 CI 用：证明打进包里的 Qt 能用 |
 
-打完**必须**跑一遍产物自检（CI 的 `exe` 作业就是「打包 + 自检」这两步）：
+选型取舍（为什么 PyInstaller 而不是 Nuitka、为什么不用 UPX、typer → click 的实测结论、
+冻结后编码与 OpenSSL 的坑）见 **[docs/packaging.md](docs/packaging.md)**。
 
-```bash
-uv run python scripts/dist_smoke.py     # CLI --version/list/doctor + 离屏跑 GUI 并截图
-```
+## 文档
 
-选型与取舍：
-
-- **形态按产物分**：CLI 用 **onefile**（"发一个文件就能用"是它最重要的属性，实测本机
-  `hnd --version` 每次启动 1.4~1.7s，其中绝大部分是解压 29 MB 内容到临时目录；
-  `hnd run` 本身要几秒，所以这点开销无所谓）；GUI 用 **onedir**（121 MB 的包每次启动都
-  解压一遍完全不能接受，而且窗口程序本来就要连目录一起发）。
-- **不用 UPX**：体积省不到 5 MB，却会弄坏 Qt 插件与开了 CFG 的 DLL。
-- **选 PyInstaller 而不是 Nuitka**：Nuitka 官方文档把 Windows 杀软误报的解法放在**付费**的
-  Commercial 计划里且"不保证有效"；本项目是免费校园工具，PyInstaller 那条缓解路线
-  （onedir / 不用 UPX / 写版本资源 / 需要时再签名）全部公开且免费。Nuitka 编译期还长得多。
-- **不跨平台编译**：PyInstaller 只能在目标平台上构建，所以 CI 用
-  windows / ubuntu 矩阵出产物（macOS 标为实验性：能构建、也跑同一套冒烟，但维护者没有机器验证）。
-- 冻结后 `PYTHONUTF8` / `PYTHONIOENCODING` 会失效，因此 CLI 入口显式把
-  stdout / stderr 固定成 UTF-8 + `errors="replace"`（`cli._make_stdio_robust`）：
-  重定向出来的 Markdown 与 `--json` 都是合法 UTF-8，界面符号即使编码不支持也只退化成一个 `?`。
-- **关于"把 typer 换成 click 能不能瘦身"（实测过，别再重复问）**：typer 自身的代码在产物里
-  只占 207 KB（压缩后，其中内联的 click 就占 107 KB），换成独立 click 净省约 **100 KB**，
-  不值得为此重写 490 行 CLI 并丢掉 Typer 的写法。真正的大头是 typer 的 **rich 帮助渲染**：
-  `typer/rich_utils.py` 会 import `rich.markdown`（→ markdown_it）与 `rich.traceback`
-  （→ **pygments**），实测把这两个排掉后 onefile 从 **14.30 MB 降到 12.47 MB（省 1.83 MB，13%）**。
-  要拿这笔钱只需把 `rich_markup_mode` 关掉（一行），代价是 `--help` 从 rich 面板退化成
-  click 风格的纯文本。**当前选择保留 rich 帮助**：1.8 MB 换中文界面的可读性，对"发给同学的工具"划算。
-
-> 未签名的 Windows 产物首次运行可能被 SmartScreen 拦一下（"更多信息 → 仍要运行"）。
-> 真要对外发布，建议加代码签名证书，参见 skill `pyside6-desktop` 的 signing / AV 参考。
-
-## 项目结构
-
-```text
-.
-├── src/hdu_netdebugger/   # 包源码（见下）
-├── tests/                 # pytest 用例（470+）
-├── scripts/               # 运维脚本：tasks.ps1 / gui_smoke.py / gui_render_sample.py
-│                          #           dist_smoke.py（冻结产物自检）/ check_glyphs.py
-├── packaging/             # PyInstaller 入口脚本 + hnd.spec + Windows 版本资源
-└── .github/workflows/     # CI（lint / test / build wheel / exe）
-```
-
-```text
-src/hdu_netdebugger/
-├── cli.py            # Typer CLI 入口
-├── config.py         # 一次运行的参数（Ping / HTTP / DNS / TLS / 代理开关）
-├── console.py        # 终端渲染（横幅、逐项输出、结论面板、doctor 表格）
-├── constants.py      # 杭电网络常量（网段 / 服务器 IP / 深澜错误码 / 运营商映射）
-├── context.py        # 检查间共享状态（取代原版 GlobalFlagList）
-├── registry.py       # @checker / @condition 装饰器与检查项注册表
-├── runner.py         # 编排：条件判定 → 执行 → 汇总裁剪
-├── report.py         # Markdown / JSON 报告生成
-├── session.py        # 一次运行共享的资源（配置 / 状态 / HTTP 池 / Ping 实现）
-├── theme.py          # 状态 → 图标 / 颜色的唯一映射（CLI 与 GUI 共用）
-├── models/           # 数据模型（检查结果、深澜响应、Ping 结果、网卡）
-├── net/              # 网络能力（异步 Ping、HTTP、DNS、网卡枚举）
-├── checkers/         # 8 个检查项实现
-└── gui/              # PySide6 可选图形界面
-```
-
-## 开发
-
-```bash
-make dev      # uv sync --all-groups --extra gui
-make lint     # ruff format --check + ruff check + ty check
-make fmt      # ruff check --fix + ruff format
-make test     # pytest（含覆盖率门槛 80%）
-make test-fast # pytest --no-cov
-make build    # uv build（sdist + wheel）
-make exe      # PyInstaller 打包可执行文件（见上一节）
-make exe-smoke # 打包 + 冻结产物自检
-```
-
-Windows 上没装 `make` 时，`scripts/tasks.ps1` 提供完全等价的任务：
-
-```powershell
-pwsh -File scripts/tasks.ps1 lint
-pwsh -File scripts/tasks.ps1 test
-pwsh -File scripts/tasks.ps1 fmt
-pwsh -File scripts/tasks.ps1 exe-smoke
-```
-
-直接调用底层命令也可以：
-
-```bash
-uv run ruff format --check .
-uv run ruff check .
-uv run ty check
-uv run pytest
-```
-
-质量工具链：
-
-- **[uv](https://docs.astral.sh/uv/)** — 依赖与虚拟环境管理
-- **[ruff](https://docs.astral.sh/ruff/)** — lint + format（替代 flake8 / black / isort），`select = ["ALL"]` + 逐条说明理由的 ignore
-- **[ty](https://docs.astral.sh/ty/)** — 类型检查（替代 mypy / pyright）
-- **pytest + pytest-asyncio + coverage** — 668 个用例，覆盖率门槛 80%（当前 ~95%）
-
-所有网络调用都通过 `RunSession` 注入，因此**检查项**测试用
-`tests/fakes.py` 里的 `FakePinger` / `FakeHttp` 就能在毫秒内跑完 8 个检查项，
-不产生任何真实流量，也不需要联网。`net/` 那一层的测试会打本机回环
-（ICMP、127.0.0.1 上的临时 HTTP 服务），同样不依赖外网。
-GUI 用 Qt 的 `offscreen` 平台插件离屏测试。
-
-CI（`.github/workflows/ci.yml`）在 push / PR 时跑：
-
-- `ruff format --check` + `ruff check` + `ty check`
-- Ubuntu / Windows / macOS × Python 3.12 / 3.13 的完整测试矩阵
-  （Linux 会先装齐 Qt 所需的系统库；GUI 测试模块在缺依赖时直接报错，不会静默跳过）
-- `uv build` 后把 wheel 装进干净虚拟环境，验证 `hnd --version` / `hnd list` 可用
-- 打包可执行文件并在三个平台上跑冻结产物自检（`scripts/dist_smoke.py`）
-
-### 跨平台说明
-
-- **类型检查用 `python-platform = "all"`**。项目里有大量按 `sys.platform` 分流的代码
-  （`winreg` / `ctypes.WinDLL` / `get_last_error`）。ty 默认只按当前运行平台解析符号，
-  会导致同一份代码在 Windows 上通过、在 Linux 上报"`winreg` 没有 `OpenKey`"这类假阳性。
-  设为 `all` 后 ty 不预设目标平台，与运行时守卫的写法一致。
-- **界面上的固定符号只用基本多文种平面（BMP）内的字符**。曾经用过 `💡`（U+1F4A1）：
-  Windows 有 Segoe UI Emoji 回退所以看着正常，Debian 默认的 WQY 字体没有该字形，
-  会直接渲染成豆腐块。需要换符号时先跑 `scripts/check_glyphs.py` 在目标平台确认字形；
-  测试里也有断言锁死"界面符号码点 ≤ U+FFFF"。
-- **Linux / macOS 的原始 ICMP 套接字无需 root**：`icmplib` 在 Unix 上用
-  `SOCK_DGRAM` 非特权模式；Windows 上原始套接字要管理员权限，因此普通用户会自动
-  降级到 `iphlpapi!IcmpSendEcho`（ctypes 调用，无需任何权限）。
-
-### 已在真机验证
-
-| 平台 | 结果 |
+| 文档 | 内容 |
 |------|------|
-| Windows 10 IoT 企业版 LTSC 19044（本机，杭电校园网生活区，电信出口） | `ruff` / `ty` 全绿；668 个用例中 667 通过、1 项平台跳过（覆盖率 ~95%）。8 项检查逐项可达：本机在路由器后且开着 Mihomo，`获取基本信息` / `检查代理状态` 按设计给出对隧道网卡的警告，其余 6 项通过 |
-| Debian 13 trixie x86_64（Python 3.13 宿主 / venv 3.12） | `ruff` / `ty` 全绿，完整测试套件通过（含离屏 GUI 与 QThread）；非 root 用户下 `SOCK_DGRAM` 非特权 ICMP 正常 |
+| [docs/checks.md](docs/checks.md) | 检查项详解、比原版多做的诊断、与 ICU 官方手册的核对 |
+| [docs/packaging.md](docs/packaging.md) | 打包选型与取舍、体积实测、跨平台构建 |
+| [docs/development.md](docs/development.md) | 开发命令、测试与 CI、项目结构、跨平台说明、真机验证 |
+| [docs/roadmap.md](docs/roadmap.md) | 后续计划、待确认的时效性事实、已知机制疑点 |
+| [docs/parity.md](docs/parity.md) | 与 C# 原版的实现差异、复刻中修正的问题 |
 
-> macOS 分支（`ping -W <ms> -m <ttl>`）按 `ping(8)` 语义实现，参数拼装（含 BSD 的
-> 毫秒与 GNU 的秒之差）已用改 `sys.platform` 的方式单测覆盖，但**没有真机跑过**。
+## 质量
 
-## 与 C# 原版的差异
-
-| 原版 | 本复刻 |
-|------|--------|
-| C# 特性 + 反射扫描注册检查项 | Python 装饰器 `@checker(...)` 注册，显式可读；条件用 `@condition(...)`，且支持子类覆盖 |
-| `ConcurrentDictionary<string, object> GlobalFlagList` | 强类型 `CheckContext` 数据类 |
-| `System.Net.NetworkInformation.Ping` | 三级后端：`icmplib` 原始套接字 → Win32 `IcmpSendEcho` → 系统 `ping` 命令，自动降级 |
-| `DnsClient` | `dnspython` 异步解析器，可指定 DNS 服务器 |
-| `HttpClient` | `httpx.AsyncClient`（默认不跟随重定向、不保留 Cookie） |
-| MVVM + Avalonia | Typer CLI（主）+ PySide6 可选 GUI |
-| 无测试 | 668 个 pytest 用例 + GitHub Actions CI |
-
-实现过程中还修正（或发现）了原版的几处问题：
-
-- `AddWarning("")` 会把结论从"通过"提升为"警告"，却一条警告都没记录 —— 现在空白消息不再改变状态。
-- 检查项的"命名空间更深者覆盖前者"是隐式行为，现在改成语义明确的 `override=True`，
-  重名注册默认直接报错，不会静默失效。
-- 复刻时曾把 `IcmpSendEcho` 的目标地址按主机序传入（该 API 要的是网络序），
-  结果 Windows 上非管理员用户的保底后端会去 ping 另一个地址，把通的目标全报成超时 ——
-  现在用 `_ipaddr_network_order()` 并按 packed 字节小端解释，另有真机回归用例。
+`ruff`（`select = ["ALL"]` + 逐条说明理由的 ignore）+ `ty` 类型检查 + pytest（**668 个用例**，
+覆盖率门槛 80%，当前 ~93%）+ GitHub Actions（lint / test / build wheel / 冻结产物自检）。
+检查项测试全部注入假网络（`tests/fakes.py`），毫秒级跑完、不产生真实流量。
 
 ## License
 
