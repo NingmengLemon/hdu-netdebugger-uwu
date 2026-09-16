@@ -2,18 +2,35 @@
 
 对应原版 ``Checkers/GetInfo.cs``：枚举活动网卡、识别所在的杭电网段，
 并顺带嗅探 VPN / 隧道类接口。
+
+本复刻在此之上多做了两件原版没有、但排查时最要紧的事：
+
+* 每个接口额外输出 **IP 配置证据**（DHCP 开没开、网关、DNS、系统索引 / MTU）——
+  ICU / 电专互联的排查流程第一步就是"是否已正确获取到 IP 地址"；
+* 输出**探测出站归属**：本工具后续的 ping 到底从哪张网卡出去。校园里装代理 / VPN
+  的同学不少，TUN 接口会以更低的 metric 抢走默认路由，于是所有探测都从隧道出去 ——
+  那时"BAS 可达"并不代表校园物理链路可达，必须让读者看到这一点。
 """
 
 from __future__ import annotations
 
 import asyncio
+from typing import Final
 
 from hdu_netdebugger.checkers.base import Checker
+from hdu_netdebugger.constants import ALI_DNS_IP, BAS_IP, SRUN_IP
 from hdu_netdebugger.models.interface import InterfaceInfo, InterfaceKind
 from hdu_netdebugger.net.interfaces import list_interfaces
 from hdu_netdebugger.registry import checker
 
 __all__ = ["GetInfoCheck"]
+
+#: 后续检查项会探测的目标：这里把它们各自的出站接口一并查出来
+_PROBE_TARGETS: Final = (
+    ("BAS", BAS_IP),
+    ("深澜认证", SRUN_IP),
+    ("公网DNS", ALI_DNS_IP),
+)
 
 
 @checker("获取基本信息", order=-1)
@@ -35,6 +52,7 @@ class GetInfoCheck(Checker):
             if interface.kind is InterfaceKind.ETHERNET and interface.ipv4:
                 found_any = True
                 self.log_lines(interface.describe())
+                self.log_lines(interface.describe_config())
                 network = interface.network
                 if network is not None:
                     # 与原版一致：后匹配到的接口覆盖前面的结果
@@ -46,8 +64,10 @@ class GetInfoCheck(Checker):
         if not found_any:
             self.add_warning("未找到符合条件的网络接口（以太网且已启用且有IPv4地址）")
             self.failed("未找到符合条件的网络接口")
-        else:
-            self.passed(self._summary())
+            return
+
+        self._report_egress()
+        self.passed(self._summary())
 
     def _report_tunnel(self, interface: InterfaceInfo) -> None:
         """记录 VPN / 隧道接口。"""
@@ -58,6 +78,28 @@ class GetInfoCheck(Checker):
         )
         self.log_lines(interface.describe())
         self.context.has_tunnel_interface = True
+
+    def _report_egress(self) -> None:
+        """记录探测流量实际从哪个接口出去，并在被隧道接管时明确警告。"""
+        self.log("探测出站归属:")
+        egresses = [(label, self.session.egress(target)) for label, target in _PROBE_TARGETS]
+        for label, egress in egresses:
+            kind = egress.interface.kind.label if egress.interface is not None else "未知"
+            self.log(f"- {label} {egress.target}: {egress.describe()}（类型 {kind}）")
+
+        tunnels = [egress for _label, egress in egresses if egress.is_tunnel_like]
+        if not tunnels:
+            return
+
+        names = "、".join(sorted({item.name for egress in tunnels if (item := egress.interface)}))
+        self.add_warning(
+            f"探测流量经由隧道类接口出站（{names}，metric 更低所以抢走了默认路由）："
+            "以下各项「可达」结论反映的是隧道侧，不代表校园网物理链路"
+        )
+        self.add_suggestion(
+            "只想看校园网本身的情况时，关掉 VPN / 代理的 TUN 模式后重跑；"
+            "否则请忽略 BAS / 深澜 / 公网 这几项的可达性结论"
+        )
 
     def _summary(self) -> str:
         """根据识别出的网段给出总览。"""

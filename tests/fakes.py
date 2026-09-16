@@ -1,8 +1,8 @@
 """测试替身与样本数据.
 
 检查项只通过 :class:`~hdu_netdebugger.session.RunSession` 访问外部世界，
-因此注入 :class:`FakePinger` 与 :class:`FakeHttp` 就能在毫秒内跑完全部检查项，
-不产生任何真实网络流量。
+因此注入 :class:`FakePinger` / :class:`FakeHttp` / :class:`FakeRouter`
+就能在毫秒内跑完全部检查项，不产生任何真实网络流量。
 """
 
 from __future__ import annotations
@@ -21,12 +21,14 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
 
     from hdu_netdebugger.net.ping import Backend, PingOptions
+    from hdu_netdebugger.net.routes import RouteInfo
 
 __all__ = [
     "SRUN_DEVICE_DETAIL",
     "SRUN_OK_PAYLOAD",
     "FakeHttp",
     "FakePinger",
+    "FakeRouter",
     "make_session",
     "srun_jsonp",
 ]
@@ -85,6 +87,29 @@ class FakePinger:
         return MultiPingResult(target=target, replies=replies)
 
 
+class FakeRouter:
+    """按目标地址给出预置出站路由的替身。
+
+    默认什么也不返回（等价于"查不到出站归属"）；需要构造"流量被隧道接管"的场景时，
+    用 :meth:`set_route` 给某个目标指定 ``interface_index``，再把 session 的接口
+    列表换成带该索引的样本即可。
+    """
+
+    def __init__(self, routes: Mapping[str, RouteInfo] | None = None) -> None:
+        self.routes: dict[str, RouteInfo] = {
+            str(target): route for target, route in (routes or {}).items()
+        }
+        self.calls: list[str] = []
+
+    def set_route(self, target: str, route: RouteInfo) -> None:
+        """给某个目标指定出站路由。"""
+        self.routes[str(target)] = route
+
+    def __call__(self, target: str) -> RouteInfo | None:
+        self.calls.append(target)
+        return self.routes.get(target)
+
+
 class FakeHttp:
     """按 URL 精确匹配返回预置响应的 HTTP 替身。"""
 
@@ -139,14 +164,20 @@ def make_session(
     *,
     pinger: FakePinger | None = None,
     http: FakeHttp | None = None,
+    router: FakeRouter | None = None,
     **config_overrides: Any,
 ) -> RunSession:
-    """构造注入了假网络的 session。"""
+    """构造注入了假网络的 session。
+
+    默认连路由查询也换成替身：否则每个检查项测试都会去调真实的 ``GetBestRoute``
+    并枚举一次真实网卡，既慢又让测试依赖跑测机器的网络配置。
+    """
     return RunSession(
         config=RunConfig(**config_overrides),
         context=CheckContext(),
         pinger=pinger or FakePinger(),
         http=http or FakeHttp(),  # ty: ignore[invalid-argument-type]
+        router=router or FakeRouter(),
     )
 
 

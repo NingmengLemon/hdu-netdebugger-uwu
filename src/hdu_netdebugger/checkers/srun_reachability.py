@@ -18,6 +18,7 @@ class SrunReachabilityCheck(Checker):
 
     async def check(self) -> None:
         result = await self.session.ping(SRUN_IP)
+        self.log(self.session.egress(SRUN_IP).describe())
         self.log_lines(result.detail_lines())
 
         if result.all_succeeded:

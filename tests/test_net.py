@@ -38,8 +38,9 @@ from hdu_netdebugger.net.ping import (
     reset_backend_cache,
     resolve_target,
 )
+from hdu_netdebugger.net.routes import RouteInfo
 from hdu_netdebugger.session import RunSession
-from tests.fakes import FakeHttp
+from tests.fakes import FakeHttp, FakeRouter
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -1132,6 +1133,46 @@ class TestRunSession:
         result = await session.ping("10.0.0.1")
         assert calls == ["10.0.0.1"]
         assert result.success_count == 1
+
+    def test_egress_resolves_the_interface_by_index(self) -> None:
+        session = RunSession(
+            router=FakeRouter({"10.150.0.1": RouteInfo(interface_index=75, metric=0)})
+        )
+        session._interfaces = [
+            InterfaceInfo(
+                name="Mihomo",
+                description="Meta Tunnel",
+                kind=InterfaceKind.PROP_VIRTUAL,
+                is_up=True,
+                index=75,
+            )
+        ]
+
+        egress = session.egress("10.150.0.1")
+
+        assert egress.interface is not None
+        assert egress.interface.name == "Mihomo"
+        assert egress.is_tunnel_like is True
+        assert "Mihomo" in egress.describe()
+
+    def test_egress_is_unknown_without_a_route(self) -> None:
+        session = RunSession(router=FakeRouter())
+
+        egress = session.egress("10.150.0.1")
+
+        assert egress.route is None
+        assert egress.interface is None
+        assert egress.describe() == "出站: (未知)"
+
+    def test_egress_degrades_when_the_router_raises(self) -> None:
+        """路由查询失败只是"这项证据拿不到"，不该让整个检查项崩掉。"""
+
+        def boom(_target: str) -> RouteInfo | None:
+            raise OSError("读不到路由表")
+
+        session = RunSession(router=boom)
+
+        assert session.egress("10.150.0.1").describe() == "出站: (未知)"
 
 
 class TestRunConfig:

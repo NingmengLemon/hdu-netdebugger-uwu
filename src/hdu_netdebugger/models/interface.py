@@ -45,7 +45,13 @@ _KIND_LABELS: dict[InterfaceKind, str] = {
 
 @dataclass(frozen=True, slots=True)
 class InterfaceInfo:
-    """一个网络接口的快照。"""
+    """一个网络接口的快照。
+
+    除了原版 ``BuildIFInfo`` 用的那四项，还带上了真正能定位故障的配置信息：
+    Windows 系统索引（用来把路由表里的出口映射回接口）、网关、DNS 服务器、
+    以及 DHCP 是否启用。排查校园网时这几项往往比网卡名字有用得多 ——
+    ICU/电专互联的排查流程第一步就是"是否已正确获取 IP 地址"。
+    """
 
     name: str
     description: str
@@ -55,6 +61,14 @@ class InterfaceInfo:
     ipv6: tuple[str, ...] = ()
     mtu: int | None = None
     speed_mbps: int | None = None
+    #: 系统接口索引（Windows ``IfIndex``）；未知时为 ``None``
+    index: int | None = None
+    #: 默认网关；没有默认路由时为 ``None``
+    gateway: str | None = None
+    #: 系统配置的 DNS 服务器
+    dns_servers: tuple[str, ...] = ()
+    #: 该接口是否启用 DHCP；非 Windows 或未知时为 ``None``
+    dhcp_enabled: bool | None = None
 
     @property
     def ipv4_addresses(self) -> tuple[IPv4Address, ...]:
@@ -88,4 +102,24 @@ class InterfaceInfo:
             f"描述: {self.description}",
             f"IPv4 地址: {', '.join(self.ipv4)}",
             f"IPv6 地址: {', '.join(self.ipv6)}",
+        ]
+
+    def describe_config(self) -> list[str]:
+        """接口的 IP 配置证据（原版没有，排查时最常用）。
+
+        刻意与 :meth:`describe` 分开：前者要保持与原版日志逐字一致，
+        这里是新增证据，不能混进去。
+        """
+        if self.dhcp_enabled is None:
+            dhcp = "未知"
+        else:
+            dhcp = "已启用" if self.dhcp_enabled else "未启用（静态配置）"
+        return [
+            f"DHCP: {dhcp}",
+            f"默认网关: {self.gateway or '(无)'}",
+            f"DNS 服务器: {', '.join(self.dns_servers) or '(无)'}",
+            (
+                f"系统接口索引: {self.index if self.index is not None else '(未知)'}"
+                f" / MTU: {self.mtu if self.mtu is not None else '(未知)'}"
+            ),
         ]

@@ -34,6 +34,7 @@ class ISPCheck(Checker):
         self.log(f"检测到当前使用的运营商为 {name}，网关IP为 {gateway}。开始检测网关可达性...")
 
         result = await self.session.ping(gateway)
+        self.log(self.session.egress(gateway).describe())
         self.log_lines(result.detail_lines())
 
         if result.all_succeeded:

@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 from hdu_netdebugger.models.enums import PingStatus
 from hdu_netdebugger.models.ping import MultiPingResult, PingReply
+from hdu_netdebugger.net.winaddr import network_order_ipaddr
 
 if TYPE_CHECKING:
     from typing import Protocol, Self
@@ -200,12 +201,12 @@ _IP_TTL_EXPIRED = frozenset({11013, 11014})
 def _ipaddr_network_order(address: str) -> int:
     """把点分十进制地址转成 ``IcmpSendEcho`` 要求的网络序 ``IPAddr``。
 
-    ``IPAddr`` 是个 ``ULONG``，但它的**内存布局**必须是网络序字节 —— 也就是说小端机器上
-    192.0.2.1 对应的数值是 ``0x010200C0``。若直接用 ``int(IPv4Address(address))``
-    （把点分十进制当主机序整数解释）会得到字节反过来的 ``0xC0000201``，
-    实际去 ping 的是另一个地址：可达目标会报超时，连回环地址都 ping 不到本机。
+    实现在 :func:`hdu_netdebugger.net.winaddr.network_order_ipaddr`：``IPAddr`` 的
+    **内存布局**必须是网络序字节（小端机器上 192.0.2.1 是 ``0x010200C0``），
+    用 ``int(IPv4Address(...))`` 会拿到字节反过来的 ``0xC0000201``，于是去 ping 了
+    另一个地址。这个坑踩过一次，所以转换只留一处实现。
     """
-    return int.from_bytes(IPv4Address(address).packed, "little")
+    return network_order_ipaddr(address)
 
 
 def _windows_icmp_ping(address: str, opts: PingOptions) -> MultiPingResult:

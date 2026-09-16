@@ -20,6 +20,7 @@ class PublicNetCheck(Checker):
 
     async def check(self) -> None:
         result = await self.session.ping(ALI_DNS_IP)
+        self.log(self.session.egress(ALI_DNS_IP).describe())
         self.log_lines(result.detail_lines())
 
         if result.all_succeeded:

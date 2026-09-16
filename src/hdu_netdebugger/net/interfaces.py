@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import socket
 import sys
 from typing import TYPE_CHECKING, Any
@@ -44,8 +45,61 @@ _IF_TYPE_MAP: dict[int, InterfaceKind] = {
 
 _IF_OPER_STATUS_UP = 1
 
-#: ``GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER``
-_GAA_FLAGS = 0x02 | 0x04 | 0x08
+
+class SocketAddress(ctypes.Structure):
+    """``SOCKET_ADDRESS``：一个裸的 ``sockaddr`` 指针 + 长度。"""
+
+    _fields_ = (
+        ("lpSockaddr", ctypes.c_void_p),
+        ("iSockaddrLength", ctypes.c_int),
+    )
+
+
+class SockaddrIn(ctypes.Structure):
+    """``sockaddr_in``。"""
+
+    _fields_ = (
+        ("sin_family", ctypes.c_uint16),
+        ("sin_port", ctypes.c_uint16),
+        ("sin_addr", ctypes.c_uint8 * 4),
+        ("sin_zero", ctypes.c_uint8 * 8),
+    )
+
+
+class SockaddrIn6(ctypes.Structure):
+    """``sockaddr_in6``。"""
+
+    _fields_ = (
+        ("sin6_family", ctypes.c_uint16),
+        ("sin6_port", ctypes.c_uint16),
+        ("sin6_flowinfo", ctypes.c_uint32),
+        ("sin6_addr", ctypes.c_uint8 * 16),
+        ("sin6_scope_id", ctypes.c_uint32),
+    )
+
+
+def _sockaddr_text(raw: int | None) -> str | None:
+    """把 ``SOCKET_ADDRESS.lpSockaddr`` 指向的原生地址转成字符串。"""
+    if not raw:
+        return None
+    family = ctypes.cast(raw, ctypes.POINTER(ctypes.c_uint16)).contents.value
+    if family == _AF_INET:
+        sockaddr = ctypes.cast(raw, ctypes.POINTER(SockaddrIn)).contents
+        return socket.inet_ntop(socket.AF_INET, bytes(sockaddr.sin_addr))
+    if family == _AF_INET6:
+        sockaddr6 = ctypes.cast(raw, ctypes.POINTER(SockaddrIn6)).contents
+        return socket.inet_ntop(socket.AF_INET6, bytes(sockaddr6.sin6_addr))
+    return None
+
+
+#: ``GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST``
+#:
+#: 刻意**不**带 ``GAA_FLAG_SKIP_DNS_SERVER``（0x08）：排查校园网时"这台机器到底在用
+#: 哪个 DNS"是关键证据 —— 官方排查流程里"改 DNS 为校园 DNS"就是标准处方之一，
+#: 而只查硬编码的校园 DNS 并不能说明用户机器的实际配置。
+_GAA_FLAGS = 0x02 | 0x04
+#: ``IP_ADAPTER_DHCP_ENABLED``（``ipifcons.h``）
+_IP_ADAPTER_DHCP_ENABLED = 0x04
 _ERROR_BUFFER_OVERFLOW = 111
 _AF_UNSPEC = 0
 _AF_INET = 2
@@ -108,14 +162,7 @@ def list_interfaces(*, include_loopback: bool = False) -> list[InterfaceInfo]:
 
 def _windows_interfaces() -> list[InterfaceInfo] | None:
     """用 ``GetAdaptersAddresses`` 枚举接口；失败时返回 ``None`` 让调用方退回 psutil。"""
-    import ctypes  # noqa: PLC0415 - 仅 Windows 分支需要
-    from ctypes import wintypes  # noqa: PLC0415
-
-    class SocketAddress(ctypes.Structure):
-        _fields_ = (
-            ("lpSockaddr", ctypes.c_void_p),
-            ("iSockaddrLength", ctypes.c_int),
-        )
+    from ctypes import wintypes  # noqa: PLC0415 - 仅 Windows 分支需要
 
     class IpAdapterUnicastAddress(ctypes.Structure):
         _fields_ = (
@@ -130,6 +177,16 @@ def _windows_interfaces() -> list[InterfaceInfo] | None:
             ("PreferredLifetime", ctypes.c_uint32),
             ("LeaseLifetime", ctypes.c_uint32),
             ("OnLinkPrefixLength", ctypes.c_uint8),
+        )
+
+    class IpAdapterDnsServerAddress(ctypes.Structure):
+        """DNS 服务器链表节点（只需要 ``Next`` 与 ``Address``）。"""
+
+        _fields_ = (
+            ("Length", ctypes.c_uint32),
+            ("Reserved", ctypes.c_uint32),
+            ("Next", ctypes.c_void_p),
+            ("Address", SocketAddress),
         )
 
     class IpAdapterAddresses(ctypes.Structure):
@@ -151,12 +208,14 @@ def _windows_interfaces() -> list[InterfaceInfo] | None:
             ("Mtu", ctypes.c_uint32),
             ("IfType", ctypes.c_uint32),
             ("OperStatus", ctypes.c_uint32),
-            # 后续字段（Ipv6IfIndex 等）本工具用不到，省略即可 —— 我们只读指针不按值拷贝
             ("Ipv6IfIndex", ctypes.c_uint32),
             ("ZoneIndices", ctypes.c_uint32 * 16),
             ("FirstPrefix", ctypes.c_void_p),
             ("TransmitLinkSpeed", ctypes.c_uint64),
             ("ReceiveLinkSpeed", ctypes.c_uint64),
+            # 再往后才是网关；中间两个只为了把偏移对齐，本工具不读它们的值
+            ("FirstWinsServerAddress", ctypes.c_void_p),
+            ("FirstGatewayAddress", ctypes.c_void_p),
         )
 
     try:
@@ -198,8 +257,9 @@ def _windows_interfaces() -> list[InterfaceInfo] | None:
     cursor = ctypes.cast(buffer, ctypes.POINTER(IpAdapterAddresses))
     while cursor:
         adapter = cursor.contents
-        ipv4, ipv6 = _windows_unicast_addresses(
-            adapter.FirstUnicastAddress, IpAdapterUnicastAddress
+        ipv4, ipv6 = _windows_sockaddr_list(adapter.FirstUnicastAddress, IpAdapterUnicastAddress)
+        dns_v4, dns_v6 = _windows_sockaddr_list(
+            adapter.FirstDnsServerAddress, IpAdapterDnsServerAddress
         )
         interfaces.append(
             InterfaceInfo(
@@ -211,6 +271,10 @@ def _windows_interfaces() -> list[InterfaceInfo] | None:
                 ipv6=ipv6,
                 mtu=int(adapter.Mtu) or None,
                 speed_mbps=_link_speed_mbps(int(adapter.TransmitLinkSpeed)),
+                index=int(adapter.IfIndex) or None,
+                gateway=_windows_gateway(adapter.FirstGatewayAddress),
+                dns_servers=(*dns_v4, *dns_v6),
+                dhcp_enabled=bool(int(adapter.Flags) & _IP_ADAPTER_DHCP_ENABLED),
             )
         )
         cursor = (
@@ -220,48 +284,31 @@ def _windows_interfaces() -> list[InterfaceInfo] | None:
     return interfaces
 
 
-def _windows_unicast_addresses(
-    head: int | None,
-    unicast_type: type[Any],
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """遍历单播地址链表，解析出 IPv4 / IPv6 字符串。"""
-    import ctypes  # noqa: PLC0415 - 与 _windows_interfaces 的延迟导入保持一致
+def _windows_gateway(pointer: int | None) -> str | None:
+    """读 ``FirstGatewayAddress``（单个 ``SOCKET_ADDRESS``，不是链表）。"""
+    if not pointer:
+        return None
+    address = ctypes.cast(pointer, ctypes.POINTER(SocketAddress)).contents
+    return _sockaddr_text(address.lpSockaddr)
 
+
+def _windows_sockaddr_list(
+    head: int | None,
+    item_type: type[Any],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """遍历一条 ``SOCKET_ADDRESS`` 链表（单播地址、DNS 服务器都走这里）。"""
     if not head:
         return (), ()
 
-    class SockaddrIn(ctypes.Structure):
-        _fields_ = (
-            ("sin_family", ctypes.c_uint16),
-            ("sin_port", ctypes.c_uint16),
-            ("sin_addr", ctypes.c_uint8 * 4),
-            ("sin_zero", ctypes.c_uint8 * 8),
-        )
-
-    class SockaddrIn6(ctypes.Structure):
-        _fields_ = (
-            ("sin6_family", ctypes.c_uint16),
-            ("sin6_port", ctypes.c_uint16),
-            ("sin6_flowinfo", ctypes.c_uint32),
-            ("sin6_addr", ctypes.c_uint8 * 16),
-            ("sin6_scope_id", ctypes.c_uint32),
-        )
-
     ipv4: list[str] = []
     ipv6: list[str] = []
-    cursor = ctypes.cast(head, ctypes.POINTER(unicast_type))
+    cursor = ctypes.cast(head, ctypes.POINTER(item_type))
     while cursor:
         item = cursor.contents
-        raw = item.Address.lpSockaddr
-        if raw:
-            family = ctypes.cast(raw, ctypes.POINTER(ctypes.c_uint16)).contents.value
-            if family == _AF_INET:
-                sockaddr = ctypes.cast(raw, ctypes.POINTER(SockaddrIn)).contents
-                ipv4.append(socket.inet_ntop(socket.AF_INET, bytes(sockaddr.sin_addr)))
-            elif family == _AF_INET6:
-                sockaddr6 = ctypes.cast(raw, ctypes.POINTER(SockaddrIn6)).contents
-                ipv6.append(socket.inet_ntop(socket.AF_INET6, bytes(sockaddr6.sin6_addr)))
-        cursor = ctypes.cast(item.Next, ctypes.POINTER(unicast_type)) if item.Next else None
+        text = _sockaddr_text(item.Address.lpSockaddr)
+        if text is not None:
+            (ipv6 if ":" in text else ipv4).append(text)
+        cursor = ctypes.cast(item.Next, ctypes.POINTER(item_type)) if item.Next else None
 
     return tuple(ipv4), tuple(ipv6)
 

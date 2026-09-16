@@ -24,6 +24,7 @@ from hdu_netdebugger.checkers.proxy import (
 from hdu_netdebugger.checkers.public_net import PublicNetCheck
 from hdu_netdebugger.checkers.srun_reachability import SrunReachabilityCheck
 from hdu_netdebugger.constants import (
+    ALI_DNS_IP,
     BAS_IP,
     HDU_PORTAL_DOMAIN,
     MIUI_ROM_204_URL,
@@ -36,7 +37,8 @@ from hdu_netdebugger.models.enums import CheckResultStatus
 from hdu_netdebugger.models.interface import InterfaceInfo, InterfaceKind
 from hdu_netdebugger.net.dns import DnsResult
 from hdu_netdebugger.net.ping import Backend
-from tests.fakes import FakeHttp, FakePinger, make_session, srun_jsonp
+from hdu_netdebugger.net.routes import RouteInfo
+from tests.fakes import FakeHttp, FakePinger, FakeRouter, make_session, srun_jsonp
 
 if TYPE_CHECKING:
     from hdu_netdebugger.models.result import CheckResult
@@ -122,6 +124,126 @@ class TestGetInfoCheck:
         result = await run_check(GetInfoCheck, session)
         assert result.status is CheckResultStatus.FAIL
         assert result.summary == "未获取到网络接口信息"
+
+    async def test_logs_ip_config_evidence(
+        self,
+        session: RunSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """DHCP / 网关 / DNS 是排查校园网最常用的证据（官方流程第一步就是查 IP）。"""
+        monkeypatch.setattr(
+            "hdu_netdebugger.checkers.get_info.list_interfaces",
+            lambda: [
+                InterfaceInfo(
+                    name="以太网",
+                    description="Realtek",
+                    kind=InterfaceKind.ETHERNET,
+                    is_up=True,
+                    ipv4=("10.150.0.100",),
+                    index=15,
+                    gateway="10.150.0.1",
+                    dns_servers=("210.32.32.1",),
+                    dhcp_enabled=True,
+                )
+            ],
+        )
+
+        result = await run_check(GetInfoCheck, session)
+
+        details = result.details or ""
+        assert "DHCP: 已启用" in details
+        assert "默认网关: 10.150.0.1" in details
+        assert "DNS 服务器: 210.32.32.1" in details
+
+    async def test_warns_when_probes_egress_through_a_tunnel(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """本机实测场景：TUN 以 metric 0 抢走默认路由，所有探测都从隧道出去。
+
+        这时"BAS 可达"并不代表校园物理链路可达，必须让读者看见。
+        """
+        tunnel_route = RouteInfo(interface_index=75, next_hop="198.18.0.2", metric=0)
+        session = make_session(
+            router=FakeRouter(
+                {
+                    str(BAS_IP): tunnel_route,
+                    str(SRUN_IP): tunnel_route,
+                    str(ALI_DNS_IP): tunnel_route,
+                }
+            )
+        )
+        session._interfaces = [
+            InterfaceInfo(
+                name="Mihomo",
+                description="Meta Tunnel",
+                kind=InterfaceKind.PROP_VIRTUAL,
+                is_up=True,
+                index=75,
+            )
+        ]
+        monkeypatch.setattr(
+            "hdu_netdebugger.checkers.get_info.list_interfaces",
+            lambda: [
+                InterfaceInfo(
+                    name="以太网",
+                    description="Realtek",
+                    kind=InterfaceKind.ETHERNET,
+                    is_up=True,
+                    ipv4=("192.0.2.20",),
+                    index=15,
+                )
+            ],
+        )
+
+        result = await run_check(GetInfoCheck, session)
+
+        assert any("隧道类接口出站" in item for item in result.warnings)
+        assert any("不代表校园网物理链路" in item for item in result.warnings)
+        assert any("TUN 模式" in item for item in result.suggestions)
+        details = result.details or ""
+        assert "探测出站归属" in details
+        assert "Mihomo" in details
+        assert "metric 0" in details
+
+    async def test_physical_egress_is_not_warned_about(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """探测走物理网卡时不加那条警告（否则人人都被吓一次）。"""
+        session = make_session(
+            router=FakeRouter(
+                {
+                    str(BAS_IP): RouteInfo(interface_index=15, next_hop="10.150.0.1", metric=25),
+                }
+            )
+        )
+        session._interfaces = [
+            InterfaceInfo(
+                name="以太网",
+                description="Realtek",
+                kind=InterfaceKind.ETHERNET,
+                is_up=True,
+                index=15,
+            )
+        ]
+        monkeypatch.setattr(
+            "hdu_netdebugger.checkers.get_info.list_interfaces",
+            lambda: [
+                InterfaceInfo(
+                    name="以太网",
+                    description="Realtek",
+                    kind=InterfaceKind.ETHERNET,
+                    is_up=True,
+                    ipv4=("10.150.0.100",),
+                    index=15,
+                )
+            ],
+        )
+
+        result = await run_check(GetInfoCheck, session)
+
+        assert not any("隧道类接口出站" in item for item in result.warnings)
 
     async def test_down_interface_is_ignored(
         self,
