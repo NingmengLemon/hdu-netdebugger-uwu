@@ -654,22 +654,23 @@ class TestPingBasedChecks:
 
         assert not any("非目标地址" in item for item in result.warnings)
 
-    async def test_bas_unreachable_in_teaching_area_warns_not_fails(
+    async def test_bas_unreachable_in_teaching_area_still_fails(
         self,
         session: RunSession,
     ) -> None:
-        """`10.150.0.1` 是**生活区** BAS；教学区拿它不通是预期现象，不能判故障。
+        """教学区不通也要照常判失败，只补上下文。
 
-        官方手册没给教学区的对应测试点（``campus.html:32`` 写着"各教学楼有线地址待补充"），
-        所以教学区用户原本会稳定看到一次假失败。
+        一开始按"手册没给教学区测试点"把它降级成"仅供参考"，但 2026-09 的教学区实测
+        推翻了那个推断：教学区无线能稳定 ping 通 `10.150.0.1`（4/4，5~29ms）。
+        既然实测可达，降级就会掩盖真问题。
         """
         session.context.network_kind = NetworkKind.CAMPUS
 
         result = await run_check(BASCheck, session)
 
-        assert result.status is CheckResultStatus.WARN
-        assert result.summary == "BAS 不可达（教学区场景，仅供参考）"
-        assert any("教学区" in item for item in result.warnings)
+        assert result.status is CheckResultStatus.FAIL
+        assert result.summary == "BAS 不可达"
+        assert any("你所在的区域" in item for item in result.suggestions)
 
     async def test_bas_full_loss_fails(
         self,
