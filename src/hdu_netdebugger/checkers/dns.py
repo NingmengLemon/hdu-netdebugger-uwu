@@ -140,9 +140,14 @@ class DNSCheck(Checker):
 
         self.add_warning(
             f"本机 DNS 查询被接管：向不可路由的 {DNS_INTERCEPTION_PROBE_IP} 查询也返回了 "
-            f"{', '.join(probe.addresses)}，说明 UDP/53 被本地拦下自行应答（代理 / TUN / 本地 DNS）"
+            f"{', '.join(probe.addresses)}，说明 UDP/53 被本地拦下自行应答"
+            "（代理 / TUN / 路由器或本机自建的 DNS）"
         )
         self.add_suggestion(
             "本次「DNS 可用」只说明本机能解析该域名，不代表校园 DNS 正常；"
-            "要真正检查校园 DNS，请关掉代理 / TUN 的 DNS 接管后重跑"
+            "要真正检查校园 DNS，请绕开这层接管后重跑"
+        )
+        self.add_suggestion(
+            "若你本来就在用自建的本地 DNS（例如路由器上装的 AdGuard 之类），"
+            "这条属于预期行为，忽略即可 —— 它只影响「校园 DNS 是否正常」这一项判定"
         )
