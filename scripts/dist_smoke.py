@@ -61,6 +61,8 @@ def run_frozen(
 
     冻结后的程序会把 stdout 固定成 UTF-8（见 ``cli._make_stdio_robust``），
     所以这里用 UTF-8 解码是**有意为之** —— 解不出来就说明那个兜底失效了。
+
+    stdin 一律接 ``DEVNULL``：无参运行时程序会"等按键"，门禁绝不能被它挂住。
     """
     return subprocess.run(
         [str(executable), *args],
@@ -70,6 +72,7 @@ def run_frozen(
         errors="replace",
         timeout=timeout,
         check=False,
+        stdin=subprocess.DEVNULL,
     )
 
 
@@ -140,6 +143,7 @@ def main() -> int:
             timeout=300.0,
             check=False,
             env=environment,
+            stdin=subprocess.DEVNULL,
         )
         check(done.returncode == 0, f"退出码为 0（实际 {done.returncode}）", failures)
         check(png.is_file() and png.stat().st_size > 0, "截图非空", failures)

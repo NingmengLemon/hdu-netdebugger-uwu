@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import select
 import sys
 
 import pytest
@@ -423,3 +424,152 @@ class TestStdioRobustness:
         monkeypatch.setattr(sys, "stderr", object())
 
         cli_module._make_stdio_robust()  # 不该抛
+
+
+class TestPauseBeforeExit:
+    """双击 exe 时别让黑窗口一闪而过 —— 但**只允许"无参"这一种情况**停下来。"""
+
+    @pytest.mark.parametrize(
+        "argv",
+        [["--json"], ["--md"], ["list"], ["run"], ["doctor"], ["gui"], ["-h"], ["--version"]],
+    )
+    def test_arguments_disable_pause(self, argv: list[str]) -> None:
+        assert cli_module._should_pause_before_exit(argv) is False
+
+    def test_no_arguments_enables_pause(self) -> None:
+        assert cli_module._should_pause_before_exit([]) is True
+
+    def test_skips_when_stdin_is_not_a_terminal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """管道 / 重定向下没有窗口会消失，停住反而会卡住调用者。"""
+        calls: list[bool] = []
+
+        class _Pipe:
+            def isatty(self) -> bool:
+                return False
+
+        monkeypatch.setattr(sys, "stdin", _Pipe())
+
+        cli_module._pause_before_exit(lambda: calls.append(True))
+
+        assert calls == []
+
+    def test_skips_when_stdin_is_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "stdin", None)
+        cli_module._pause_before_exit(lambda: pytest.fail("不该等按键"))
+
+    def test_waits_for_a_key_on_a_terminal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[bool] = []
+
+        class _Tty:
+            def isatty(self) -> bool:
+                return True
+
+        monkeypatch.setattr(sys, "stdin", _Tty())
+
+        cli_module._pause_before_exit(lambda: calls.append(True))
+
+        assert calls == [True]
+
+    def test_wait_errors_never_propagate(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """等待只是附属功能，任何异常都不许影响退出码。"""
+
+        class _Tty:
+            def isatty(self) -> bool:
+                return True
+
+        def boom() -> None:
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(sys, "stdin", _Tty())
+
+        cli_module._pause_before_exit(boom)  # 不该抛
+
+    def test_wait_gives_up_after_timeout_on_windows(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """必须有上限：`isatty()` 在个别非交互场景（实测 `< NUL`）也会是真。"""
+        keys: list[bool] = []
+
+        class _Msvcrt:
+            @staticmethod
+            def kbhit() -> bool:
+                return False
+
+            @staticmethod
+            def getch() -> bytes:
+                keys.append(True)
+                return b""
+
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setitem(sys.modules, "msvcrt", _Msvcrt())
+
+        cli_module._wait_for_keypress(timeout_s=0.0)
+
+        assert keys == [], "超时后不该再去读键"
+
+    def test_wait_consumes_key_on_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        keys: list[bool] = []
+
+        class _Msvcrt:
+            @staticmethod
+            def kbhit() -> bool:
+                return True
+
+            @staticmethod
+            def getch() -> bytes:
+                keys.append(True)
+                return b"\r"
+
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setitem(sys.modules, "msvcrt", _Msvcrt())
+
+        cli_module._wait_for_keypress(timeout_s=1.0)
+
+        assert keys == [True]
+
+    def test_wait_times_out_on_posix(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """非 Windows 分支：select 超时未就绪就返回，不去读 stdin。"""
+        read: list[bool] = []
+
+        class _Stdin:
+            def readline(self) -> str:
+                read.append(True)
+                return ""
+
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(sys, "stdin", _Stdin())
+        monkeypatch.setattr(select, "select", lambda *_args: ([], [], []))
+
+        cli_module._wait_for_keypress(timeout_s=0.01)
+
+        assert read == []
+
+    def test_wait_reads_when_posix_stdin_is_ready(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        read: list[bool] = []
+
+        class _Stdin:
+            def readline(self) -> str:
+                read.append(True)
+                return "\n"
+
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(sys, "stdin", _Stdin())
+        monkeypatch.setattr(select, "select", lambda *_args: ([sys.stdin], [], []))
+
+        cli_module._wait_for_keypress(timeout_s=1.0)
+
+        assert read == [True]
+
+    def test_main_pauses_only_without_arguments(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        pauses: list[str] = []
+        monkeypatch.setattr(cli_module, "app", lambda: None)
+        monkeypatch.setattr(cli_module, "_pause_before_exit", lambda: pauses.append("pause"))
+
+        monkeypatch.setattr(sys, "argv", ["hnd"])
+        cli_module.main()
+        assert pauses == ["pause"]
+
+        monkeypatch.setattr(sys, "argv", ["hnd", "list"])
+        cli_module.main()
+        assert pauses == ["pause"], "带了参数就不该再停"

@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import platform
 import sys
+import time
 from ipaddress import AddressValueError, IPv4Address
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
@@ -47,7 +48,7 @@ from hdu_netdebugger.report import (
 from hdu_netdebugger.runner import run_checks, select_checkers
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from hdu_netdebugger.runner import RunResult
 
@@ -523,13 +524,85 @@ def _make_stdio_robust() -> None:
             reconfigure(encoding="utf-8", errors="replace")
 
 
+#: 无参直接运行时的收尾提示
+PAUSE_HINT = "\n按任意键（或回车）关闭窗口… "
+
+#: 等按键的时限（秒）。必须有上限：`isatty()` 在个别非交互场景下也会是真
+#: （实测用 `cmd /c "... < NUL"` 时就返回 True），没有上限就成了永久挂起。
+PAUSE_TIMEOUT_S = 120.0
+
+
+def _should_pause_before_exit(argv: Sequence[str]) -> bool:
+    """要不要在退出前停一下 —— **只有"一个参数都没给"这一种情况**。
+
+    新手同学双击 exe 时，控制台窗口会在检查结束后立刻消失，连结论都来不及看，
+    所以这里停一下等个按键。但只要带了任何参数（``hnd --json``、``hnd list``、
+    ``hnd -h``…）就说明调用者是有意为之，不该拖住他；CI、脚本、管道同理
+    （那种情况 stdin 也不是终端，见 :func:`_pause_before_exit`）。
+    """
+    return not argv
+
+
+def _wait_for_keypress(timeout_s: float = PAUSE_TIMEOUT_S) -> None:
+    """等一个按键，最多等 ``timeout_s`` 秒，超时静默放弃。
+
+    Windows 上用 ``msvcrt`` 轮询才拿得到真正的"任意键"（控制台 stdin 是**行**
+    缓冲的，``input()`` 得按回车才算一次输入）；其它平台用 ``select`` 等可读。
+    """
+    deadline = time.monotonic() + timeout_s
+
+    if sys.platform == "win32":
+        import msvcrt  # noqa: PLC0415 - 仅 Windows 分支需要
+
+        while time.monotonic() < deadline:
+            if msvcrt.kbhit():
+                msvcrt.getch()
+                return
+            time.sleep(0.05)
+        return
+
+    import select  # noqa: PLC0415 - 仅非 Windows 分支需要
+
+    remaining = max(0.0, deadline - time.monotonic())
+    if select.select([sys.stdin], [], [], remaining)[0]:
+        sys.stdin.readline()
+
+
+def _pause_before_exit(read_key: Callable[[], object] | None = None) -> None:
+    """等一个按键再退出，避免黑窗口一闪而过。
+
+    ``read_key`` 是给单测留的接缝：真去读键盘的话测试会一直卡在那里。
+    这里任何异常都不许影响退出码 —— 只是"让你看一眼结果"的附属功能。
+    """
+    if sys.stdin is None:
+        return
+    isatty = getattr(sys.stdin, "isatty", None)
+    if isatty is None or not isatty():  # 管道 / 重定向 / 窗口化构建：没有窗口会消失
+        return
+
+    printer = read_key or _wait_for_keypress
+    try:
+        sys.stdout.flush()
+        typer.echo(PAUSE_HINT, nl=False)
+        printer()
+        typer.echo()  # 让随后出现的 shell 提示符另起一行
+    except (EOFError, KeyboardInterrupt, OSError):
+        pass
+
+
 def main() -> None:
     """``hnd`` / ``hdu-netdebugger`` 的入口点。"""
     from hdu_netdebugger.checkers import load_builtin_checkers  # noqa: PLC0415
 
     _make_stdio_robust()
     load_builtin_checkers()
-    app()
+    pause = _should_pause_before_exit(sys.argv[1:])
+    try:
+        app()
+    finally:
+        # app() 是用 SystemExit 退出码结束的，finally 保证提示出现在退出之前
+        if pause:
+            _pause_before_exit()
 
 
 if __name__ == "__main__":  # pragma: no cover
