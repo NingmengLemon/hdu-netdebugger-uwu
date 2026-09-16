@@ -245,3 +245,5 @@ reports/
 
 # Local virtualenvs other than .venv
 .venv*/
+
+/references/
