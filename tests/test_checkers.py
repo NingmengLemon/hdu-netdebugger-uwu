@@ -29,7 +29,9 @@ from hdu_netdebugger.constants import (
     DNS_INTERCEPTION_PROBE_IP,
     HDU_PORTAL_DOMAIN,
     MIUI_ROM_204_URL,
+    PUBLIC_ANCHOR_IP,
     SRUN_IP,
+    SRUN_PRODUCT_GATEWAYS,
     NetworkKind,
     SrunProductId,
 )
@@ -397,10 +399,90 @@ class TestGetInfoCheck:
         await run_check(GetInfoCheck, session)
         assert session.context.interfaces == sample
 
+    # ---------------------------------------------------------------------------
+    # 简单 Ping 类检查
+    # ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# 简单 Ping 类检查
-# ---------------------------------------------------------------------------
+    async def test_detects_eduroam_network(
+        self,
+        session: RunSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """eduroam 也是校园网接入方式，原版会把它判成"未检测到校园网地址"。"""
+        monkeypatch.setattr(
+            "hdu_netdebugger.checkers.get_info.list_interfaces",
+            lambda: [
+                InterfaceInfo(
+                    name="WLAN",
+                    description="Intel",
+                    kind=InterfaceKind.ETHERNET,
+                    is_up=True,
+                    ipv4=("10.252.1.5",),
+                )
+            ],
+        )
+
+        result = await run_check(GetInfoCheck, session)
+
+        assert result.status is CheckResultStatus.PASS
+        assert result.summary == "检测到eduroam 漫游网络"
+        assert session.context.network_kind is NetworkKind.EDUROAM
+        assert any("eduroam" in item for item in result.suggestions)
+
+    @pytest.mark.parametrize(
+        ("address", "keyword"),
+        [
+            ("169.254.10.20", "DHCP"),
+            ("192.168.1.10", "路由器"),
+            ("10.230.5.5", "10.230"),
+        ],
+    )
+    async def test_reports_abnormal_segments(
+        self,
+        address: str,
+        keyword: str,
+        session: RunSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """三类异常网段要说清是哪一种（官方手册把它们分得很清楚）。"""
+        sample = InterfaceInfo(
+            name="以太网",
+            description="Realtek",
+            kind=InterfaceKind.ETHERNET,
+            is_up=True,
+            ipv4=(address,),
+        )
+        monkeypatch.setattr(
+            "hdu_netdebugger.checkers.get_info.list_interfaces",
+            lambda: [sample],
+        )
+
+        result = await run_check(GetInfoCheck, session)
+
+        assert any(keyword in item for item in result.warnings)
+
+    async def test_link_local_suggests_dhcp_fix(
+        self,
+        session: RunSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """169.254 的处置是明确的：查链路，路由器改 DHCP（别用 PPPoE 拨号）。"""
+        monkeypatch.setattr(
+            "hdu_netdebugger.checkers.get_info.list_interfaces",
+            lambda: [
+                InterfaceInfo(
+                    name="以太网",
+                    description="Realtek",
+                    kind=InterfaceKind.ETHERNET,
+                    is_up=True,
+                    ipv4=("169.254.10.20",),
+                )
+            ],
+        )
+
+        result = await run_check(GetInfoCheck, session)
+
+        assert any("DHCP" in item and "PPPoE" in item for item in result.suggestions)
 
 
 class TestPingBasedChecks:
@@ -450,6 +532,23 @@ class TestPingBasedChecks:
         result = await run_check(BASCheck, session)
 
         assert not any("非目标地址" in item for item in result.warnings)
+
+    async def test_bas_unreachable_in_teaching_area_warns_not_fails(
+        self,
+        session: RunSession,
+    ) -> None:
+        """`10.150.0.1` 是**生活区** BAS；教学区拿它不通是预期现象，不能判故障。
+
+        官方手册没给教学区的对应测试点（``campus.html:32`` 写着"各教学楼有线地址待补充"），
+        所以教学区用户原本会稳定看到一次假失败。
+        """
+        session.context.network_kind = NetworkKind.CAMPUS
+
+        result = await run_check(BASCheck, session)
+
+        assert result.status is CheckResultStatus.WARN
+        assert result.summary == "BAS 不可达（教学区场景，仅供参考）"
+        assert any("教学区" in item for item in result.warnings)
 
     async def test_bas_full_loss_fails(
         self,
@@ -523,11 +622,56 @@ class TestPingBasedChecks:
         pinger: FakePinger,
         fake_http: FakeHttp,
     ) -> None:
-        pinger.set_reachable("223.5.5.5")
+        pinger.set_reachable("223.5.5.5", str(PUBLIC_ANCHOR_IP))
         fake_http.add_no_content(MIUI_ROM_204_URL)
         result = await run_check(PublicNetCheck, session)
         assert result.status is CheckResultStatus.PASS
         assert result.summary == "公网可达"
+
+    async def test_public_net_anchor_disagreement_is_reported(
+        self,
+        session: RunSession,
+        pinger: FakePinger,
+        fake_http: FakeHttp,
+    ) -> None:
+        """主锚点通、备用锚点不通：两个数字给出相反结论时必须说清楚。
+
+        依据：群里讨论过 223.5.5.5 本身也会被劫持 / 限速，单个锚点不足以断定公网状态。
+        """
+        pinger.set_reachable("223.5.5.5")
+        fake_http.add_no_content(MIUI_ROM_204_URL)
+
+        result = await run_check(PublicNetCheck, session)
+
+        assert any("公网锚点结果不一致" in item for item in result.warnings)
+        assert result.summary == "公网可达", "结论仍以 HTTP 探测为准"
+
+    async def test_public_net_secondary_anchor_alone_can_carry_the_verdict(
+        self,
+        session: RunSession,
+        pinger: FakePinger,
+        fake_http: FakeHttp,
+    ) -> None:
+        """主锚点不通但备用锚点通 —— 公网其实是通的（原来的写法会报"主DNS不可达"）。"""
+        pinger.set_reachable(str(PUBLIC_ANCHOR_IP))
+        fake_http.add_no_content(MIUI_ROM_204_URL)
+
+        result = await run_check(PublicNetCheck, session)
+
+        assert result.summary == "公网可达"
+        assert any("备用锚点" in item for item in result.warnings)
+
+    async def test_public_net_both_anchors_down(
+        self,
+        session: RunSession,
+        pinger: FakePinger,
+        fake_http: FakeHttp,
+    ) -> None:
+        fake_http.add_no_content(MIUI_ROM_204_URL)
+
+        result = await run_check(PublicNetCheck, session)
+
+        assert any("两个公网锚点都不可达" in item for item in result.warnings)
 
     async def test_public_net_ping_loss_but_http_ok(
         self,
@@ -538,6 +682,7 @@ class TestPingBasedChecks:
         """Ping 全丢但 HTTP 通了：总览是"公网可达"，状态被警告提升为 WARN。"""
         fake_http.add_no_content(MIUI_ROM_204_URL)
         pinger.count = 2
+        pinger.set_reachable(str(PUBLIC_ANCHOR_IP))
         result = await run_check(PublicNetCheck, session)
         assert result.summary == "公网可达"
         assert result.status is CheckResultStatus.WARN
@@ -552,6 +697,7 @@ class TestPingBasedChecks:
         """丢包但不全丢：警告里要报出丢包率，结论仍由 HTTP 探针决定。"""
         fake_http.add_no_content(MIUI_ROM_204_URL)
         pinger.set_pattern("223.5.5.5", (True, False))
+        pinger.set_pattern(str(PUBLIC_ANCHOR_IP), (True, False))
 
         result = await run_check(PublicNetCheck, session)
 
@@ -1082,10 +1228,59 @@ class TestISPCheck:
 
     async def test_gateway_reachable(self, session: RunSession, pinger: FakePinger) -> None:
         session.context.isp_id = SrunProductId.CHINA_TELECOM
-        pinger.set_reachable("60.176.40.1")
+        pinger.set_reachable(*map(str, SRUN_PRODUCT_GATEWAYS[SrunProductId.CHINA_TELECOM]))
         result = await run_check(ISPCheck, session)
         assert result.status is CheckResultStatus.PASS
         assert result.summary == "中国电信网关可达"
+
+    async def test_preferred_candidate_answer_needs_no_note(
+        self,
+        session: RunSession,
+        pinger: FakePinger,
+    ) -> None:
+        """手册给的首选地址应答时，不该出现"与手册不一致"的提示。"""
+        session.context.isp_id = SrunProductId.CHINA_TELECOM
+        preferred = SRUN_PRODUCT_GATEWAYS[SrunProductId.CHINA_TELECOM][0]
+        pinger.set_reachable(str(preferred))
+
+        result = await run_check(ISPCheck, session)
+
+        assert result.status is CheckResultStatus.PASS
+        assert not any("与手册/原版不一致" in item for item in result.suggestions)
+
+    async def test_fallback_candidate_answer_is_reported(
+        self,
+        session: RunSession,
+        pinger: FakePinger,
+    ) -> None:
+        """首选不应答、备选应答：结论仍是可达，但要说清实际应答的是哪个。
+
+        这条正好对应"原版的 60.176.40.1 与手册的 183.157.176.1 谁对"这个悬案 ——
+        工具的立场是**谁应答就报谁**，把判断留给证据。
+        """
+        session.context.isp_id = SrunProductId.CHINA_TELECOM
+        preferred, fallback = SRUN_PRODUCT_GATEWAYS[SrunProductId.CHINA_TELECOM]
+        pinger.set_reachable(str(fallback))
+
+        result = await run_check(ISPCheck, session)
+
+        assert result.status is CheckResultStatus.PASS
+        assert f"首选候选 {preferred} 无应答" in (result.details or "")
+        assert f"实际应答的是 {fallback}" in (result.details or "")
+        assert any("与手册/原版不一致" in item for item in result.suggestions)
+
+    async def test_all_candidates_down_lists_them(
+        self,
+        session: RunSession,
+    ) -> None:
+        session.context.isp_id = SrunProductId.CHINA_TELECOM
+
+        result = await run_check(ISPCheck, session)
+
+        assert result.status is CheckResultStatus.FAIL
+        warnings = " ".join(result.warnings)
+        for candidate in SRUN_PRODUCT_GATEWAYS[SrunProductId.CHINA_TELECOM]:
+            assert str(candidate) in warnings
 
     async def test_gateway_unreachable(self, session: RunSession) -> None:
         session.context.isp_id = SrunProductId.CHINA_MOBILE
@@ -1105,7 +1300,8 @@ class TestISPCheck:
         pinger: FakePinger,
     ) -> None:
         session.context.isp_id = SrunProductId.CHINA_TELECOM
-        pinger.set_pattern("60.176.40.1", (True, False))
+        _, fallback = SRUN_PRODUCT_GATEWAYS[SrunProductId.CHINA_TELECOM]
+        pinger.set_pattern(str(fallback), (True, False))
 
         result = await run_check(ISPCheck, session)
 

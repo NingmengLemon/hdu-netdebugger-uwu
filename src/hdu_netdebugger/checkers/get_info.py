@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+from ipaddress import IPv4Address
 from typing import Final
 
 from hdu_netdebugger.checkers.base import Checker
@@ -23,8 +24,10 @@ from hdu_netdebugger.constants import (
     BAS_IP,
     CAMPUS_NETWORK,
     DORM_NETWORK,
+    LINK_LOCAL_NETWORK,
     SRUN_IP,
     NetworkKind,
+    abnormal_network_note,
 )
 from hdu_netdebugger.models.interface import InterfaceInfo, InterfaceKind
 from hdu_netdebugger.net.interfaces import list_interfaces
@@ -157,7 +160,15 @@ class GetInfoCheck(Checker):
         """根据识别出的网段给出总览。"""
         network = self.context.network_kind
         if network is not None:
+            if network is NetworkKind.EDUROAM:
+                self.add_suggestion(
+                    "eduroam 是漫游网络，与生活区/教学区的认证体系不同；"
+                    "校园网问题请连着 i-HDU 或网线复现"
+                )
             return f"检测到{network.label}"
+
+        self._report_abnormal_addresses()
+
         known = _known_ranges_text()
         self.add_warning(f"未检测到校园网地址（工具已知网段：{known}）")
         self.add_suggestion(
@@ -166,6 +177,40 @@ class GetInfoCheck(Checker):
             "请把该网段反馈给 ICU / 维护者，工具会把它补进去"
         )
         return "未检测到校园网地址"
+
+    def _report_abnormal_addresses(self) -> None:
+        """地址落在异常网段时给出可行动的说明（官方手册最突出的那类故障）。
+
+        手册把它们分得很清楚：``169.254/16`` 是 DHCP 没拿到地址、``192.168/16`` 是
+        路由器自己发的、``10.230/16`` 另有异常 —— 而"未检测到校园网地址"这一句话
+        把这三种完全不同的处境混成了一种。
+        """
+        seen: set[str] = set()
+        # 检查 1 自己枚举的结果就在 context 里；`--only` 之外的路径不会为空
+        interfaces = self.context.interfaces or self.session.interfaces()
+        for interface in interfaces:
+            for text in interface.ipv4:
+                if text in seen:
+                    continue
+                seen.add(text)
+                try:
+                    address = IPv4Address(text)
+                except ValueError:  # pragma: no cover - 枚举层已过滤
+                    continue
+                note = abnormal_network_note(address)
+                if note is None:
+                    continue
+                self.add_warning(f"{interface.name}: {note}")
+
+        if any(
+            address in LINK_LOCAL_NETWORK
+            for interface in interfaces
+            for address in interface.ipv4_addresses
+        ):
+            self.add_suggestion(
+                "拿到 169.254.x.x 说明 DHCP 失败：确认网线/无线真的连上了，"
+                "路由器请把上网方式设为 DHCP 自动获取（不要用 PPPoE 拨号）"
+            )
 
 
 def _known_ranges_text() -> str:

@@ -21,6 +21,7 @@ from hdu_netdebugger.constants import (
     NetworkKind,
     SrunErrCode,
     SrunProductId,
+    abnormal_network_note,
     dorm_or_campus,
 )
 
@@ -64,7 +65,19 @@ def test_srun_product_maps_align() -> None:
     assert set(SRUN_PRODUCT_NAMES) == set(SRUN_PRODUCT_GATEWAYS)
     assert set(SRUN_PRODUCT_NAMES) == set(SrunProductId)
     assert SRUN_PRODUCT_NAMES[SrunProductId.CHINA_TELECOM] == "中国电信"
-    assert str(SRUN_PRODUCT_GATEWAYS[SrunProductId.CHINA_UNICOM]) == "172.20.64.1"
+
+
+def test_gateways_are_non_empty_candidate_lists() -> None:
+    """网关是**候选列表**：原版与 ICU 官方手册对电信/联通给了不同地址，谁都不该被当唯一真相。
+
+    顺带钉住来源：首选来自手册，其次才是原版的值（原版那两个疑似"出口公网网段"）。
+    """
+    assert SRUN_PRODUCT_GATEWAYS[SrunProductId.CHINA_TELECOM][0] == IPv4Address("183.157.176.1")
+    assert SRUN_PRODUCT_GATEWAYS[SrunProductId.CHINA_TELECOM][1] == IPv4Address("60.176.40.1")
+    assert SRUN_PRODUCT_GATEWAYS[SrunProductId.CHINA_UNICOM][0] == IPv4Address("221.12.1.227")
+    for candidates in SRUN_PRODUCT_GATEWAYS.values():
+        assert candidates, "每个运营商至少要有一个候选网关"
+        assert all(isinstance(item, IPv4Address) for item in candidates)
 
 
 def test_srun_product_maps_are_immutable() -> None:
@@ -83,3 +96,41 @@ def test_srun_product_id_is_int_comparable() -> None:
 def test_srun_error_codes() -> None:
     assert SrunErrCode.OK == "ok"
     assert SrunErrCode.NOT_ONLINE == "not_online_error"
+
+
+class TestNetworkRecognition:
+    """网段识别：eduroam 与三类"异常网段"要能分清（都来自 ICU 官方手册）。"""
+
+    @pytest.mark.parametrize(
+        ("address", "expected"),
+        [
+            ("10.150.1.1", NetworkKind.DORM),
+            ("10.249.1.1", NetworkKind.CAMPUS),
+            ("10.252.1.1", NetworkKind.EDUROAM),
+            ("192.0.2.20", None),
+            ("192.0.2.1", None),
+        ],
+    )
+    def test_dorm_or_campus(self, address: str, expected: NetworkKind | None) -> None:
+        assert dorm_or_campus(IPv4Address(address)) is expected
+
+    def test_eduroam_has_its_own_label(self) -> None:
+        assert NetworkKind.EDUROAM.label == "eduroam 漫游网络"
+
+    @pytest.mark.parametrize(
+        ("address", "keyword"),
+        [
+            ("169.254.10.20", "DHCP"),
+            ("192.168.1.10", "路由器"),
+            ("10.230.5.5", "10.230"),
+        ],
+    )
+    def test_abnormal_networks_have_actionable_notes(self, address: str, keyword: str) -> None:
+        note = abnormal_network_note(IPv4Address(address))
+
+        assert note is not None
+        assert keyword in note
+
+    @pytest.mark.parametrize("address", ["10.150.1.1", "10.249.1.1", "10.252.1.1", "192.0.2.20"])
+    def test_normal_networks_have_no_abnormal_note(self, address: str) -> None:
+        assert abnormal_network_note(IPv4Address(address)) is None

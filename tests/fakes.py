@@ -63,12 +63,13 @@ class FakePinger:
         self.calls: list[tuple[str, PingOptions, Backend]] = []
         self.patterns: dict[str, tuple[bool, ...]] = {}
 
-    def set_reachable(self, target: str, *, reachable: bool = True) -> None:
-        """运行期调整某个目标的可达性。"""
-        if reachable:
-            self.reachable.add(target)
-        else:
-            self.reachable.discard(target)
+    def set_reachable(self, *targets: str, reachable: bool = True) -> None:
+        """运行期调整一个或多个目标的可达性。"""
+        for target in targets:
+            if reachable:
+                self.reachable.add(str(target))
+            else:
+                self.reachable.discard(str(target))
 
     def set_pattern(self, target: str, pattern: Sequence[bool]) -> None:
         """按逐包结果编排某个目标（``True`` 表示该包收到了回复）。"""

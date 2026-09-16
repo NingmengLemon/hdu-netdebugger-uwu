@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from hdu_netdebugger.checkers.base import Checker
-from hdu_netdebugger.constants import BAS_IP, MIUI_ROM_204_URL
+from hdu_netdebugger.constants import BAS_IP, MIUI_ROM_204_URL, NetworkKind
 from hdu_netdebugger.registry import checker
 
 __all__ = ["BASCheck"]
@@ -43,4 +43,16 @@ class BASCheck(Checker):
             self.add_suggestion("请切换到校园网环境后重试")
         else:
             self.add_suggestion("请检查IP配置或尝试重新进行物理连接")
+
+        if self.context.network_kind is NetworkKind.CAMPUS:
+            # 10.150.0.1 是**生活区**的 BAS；官方手册没给教学区的对应测试点
+            # （campus.html:32 写着"各教学楼有线地址待补充"），所以在教学区拿它
+            # 不通是预期现象，不能据此判故障 —— 否则教学区用户会稳定看到假失败。
+            self.add_warning(
+                "注意：本项探测的是生活区 BAS（10.150.0.1），教学区未必能到；"
+                "官方手册未给出教学区的对应测试点，此项结论仅供参考"
+            )
+            self.warned("BAS 不可达（教学区场景，仅供参考）")
+            return
+
         self.failed("BAS 不可达")
