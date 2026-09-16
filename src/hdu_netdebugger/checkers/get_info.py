@@ -18,7 +18,14 @@ import asyncio
 from typing import Final
 
 from hdu_netdebugger.checkers.base import Checker
-from hdu_netdebugger.constants import ALI_DNS_IP, BAS_IP, SRUN_IP
+from hdu_netdebugger.constants import (
+    ALI_DNS_IP,
+    BAS_IP,
+    CAMPUS_NETWORK,
+    DORM_NETWORK,
+    SRUN_IP,
+    NetworkKind,
+)
 from hdu_netdebugger.models.interface import InterfaceInfo, InterfaceKind
 from hdu_netdebugger.net.interfaces import list_interfaces
 from hdu_netdebugger.registry import checker
@@ -106,6 +113,22 @@ class GetInfoCheck(Checker):
         network = self.context.network_kind
         if network is not None:
             return f"检测到{network.label}"
-        self.add_warning("未检测到校园网地址")
-        self.add_suggestion("请检查网络连接，确保已连接到校园网，如果在路由器下使用，请忽略")
+        known = _known_ranges_text()
+        self.add_warning(f"未检测到校园网地址（工具已知网段：{known}）")
+        self.add_suggestion(
+            "若你确实在校园网内（例如在路由器后面），请忽略这一条；"
+            f"若你的地址段属于校园网但不在「{known}」内，"
+            "请把该网段反馈给 ICU / 维护者，工具会把它补进去"
+        )
         return "未检测到校园网地址"
+
+
+def _known_ranges_text() -> str:
+    """工具内置的校园网网段，用来说明"我按什么判定的"。
+
+    这两个网段来自 C# 原版（``Models/HDUConst.cs``），本复刻保持一致。
+    校园网拓扑会变，而网上流传的说明文档经常是旧的 —— 所以判定失败时把标准
+    连同实际地址一起打出来（每个接口的地址 / 网关 / DNS 在检查 1 的详细日志里），
+    让人能自己判断，而不是只给一句"未检测到"。
+    """
+    return f"{NetworkKind.DORM.label} {DORM_NETWORK}、{NetworkKind.CAMPUS.label} {CAMPUS_NETWORK}"

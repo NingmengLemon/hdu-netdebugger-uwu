@@ -119,6 +119,10 @@ class TestGetInfoCheck:
         assert result.status is CheckResultStatus.WARN
         assert result.summary == "未检测到校园网地址"
         assert session.context.network_kind is None
+        # 判定失败时要说清"按什么标准判的、该反馈什么" —— 网段属于会变的事实，
+        # 不能只丢一句"未检测到"就让人去猜
+        assert any("10.150.0.0/16" in item and "10.249.0.0/16" in item for item in result.warnings)
+        assert any("反馈给 ICU" in item for item in result.suggestions)
 
     async def test_no_interfaces_fails(self, session: RunSession, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr("hdu_netdebugger.checkers.get_info.list_interfaces", list)
