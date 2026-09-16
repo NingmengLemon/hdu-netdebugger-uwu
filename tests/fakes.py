@@ -62,6 +62,8 @@ class FakePinger:
         self.source = source
         self.calls: list[tuple[str, PingOptions, Backend]] = []
         self.patterns: dict[str, tuple[bool, ...]] = {}
+        #: 目标 → (最大可通过载荷, 是否回 ICMP 需要分片)
+        self.mtu_edges: dict[str, tuple[int, bool]] = {}
 
     def set_reachable(self, *targets: str, reachable: bool = True) -> None:
         """运行期调整一个或多个目标的可达性。"""
@@ -75,6 +77,23 @@ class FakePinger:
         """按逐包结果编排某个目标（``True`` 表示该包收到了回复）。"""
         self.patterns[str(target)] = tuple(pattern)
 
+    def set_mtu_edge(
+        self,
+        target: str,
+        max_payload: int,
+        *,
+        frag_needed: bool = False,
+    ) -> None:
+        """让某个目标按**载荷大小**回答，用来测路径 MTU 探测。
+
+        Args:
+            target: 目标地址。
+            max_payload: 能通过的最大载荷；超过它就全丢。
+            frag_needed: 超过边界时是否回 ICMP"需要分片"（``False`` = 静默丢弃，
+                也就是 MTU 黑洞的形态）。
+        """
+        self.mtu_edges[str(target)] = (max_payload, frag_needed)
+
     async def __call__(
         self,
         target: str,
@@ -85,6 +104,35 @@ class FakePinger:
         pattern = self.patterns.get(target)
         if pattern is None:
             pattern = (target in self.reachable,) * self.count
+
+        edge = self.mtu_edges.get(target)
+        if edge is not None:
+            max_payload, frag_needed = edge
+            alive = options.payload_size <= max_payload
+            if alive:
+                status = PingStatus.SUCCESS
+                error = None
+            elif frag_needed:
+                status = PingStatus.UNREACHABLE
+                error = "ICMP 需要分片（包超过路径 MTU）"
+            else:
+                status = PingStatus.TIMEOUT
+                error = None
+            return MultiPingResult(
+                target=target,
+                replies=tuple(
+                    PingReply(
+                        sequence=index + 1,
+                        status=status,
+                        rtt_ms=self.rtt_ms if alive else None,
+                        ttl=self.ttl if alive else None,
+                        source=self.source if alive else None,
+                        error=error,
+                    )
+                    for index in range(options.count)
+                ),
+            )
+
         replies = tuple(
             PingReply(
                 sequence=index + 1,

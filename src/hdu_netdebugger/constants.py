@@ -183,6 +183,18 @@ PING_PAYLOAD_SIZE: Final = 32
 DEFAULT_PING_COUNT: Final = 4
 #: 生存时间
 PING_TTL: Final = 64
+#: 路径 MTU 探测每次尝试的超时（秒）。
+#:
+#: 二分探测要跑十来次**失败**尝试（失败才会等满超时），必须比普通 Ping 短得多：
+#: 否则一个"大包全丢"的目标会让这一项拖到十几秒。取值依据是本机 RTT（校园 2-5ms、
+#: 公网 7-9ms）—— 0.3 秒已经是它的 30 倍以上，留足了抖动余量。
+MTU_PROBE_TIMEOUT_S: Final = 0.3
+#: 路径 MTU 探测每个尺寸发几个包。
+#:
+#: 1 个：单个 ICMP 包在公网路径上会偶发丢失（第一版就是据此把 223.5.5.5 误判成
+#: "不可达"），但丢包的代价只是边界偏一个档位，而**基线探测会重试一次**
+#: （见 ``probe_path_mtu``），所以这里不必为每次尝试都发两个包。
+MTU_PROBE_COUNT: Final = 1
 #: 两次 Ping 之间的间隔（秒）
 PING_INTERVAL_S: Final = 0.2
 

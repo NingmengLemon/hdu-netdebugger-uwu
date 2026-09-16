@@ -9,9 +9,12 @@
 
 from __future__ import annotations
 
+import sys
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from hdu_netdebugger.config import RunConfig
+from hdu_netdebugger.constants import MTU_PROBE_COUNT, MTU_PROBE_TIMEOUT_S
 from hdu_netdebugger.context import CheckContext
 from hdu_netdebugger.net.http import HttpClient
 from hdu_netdebugger.net.interfaces import list_interfaces
@@ -108,6 +111,40 @@ class RunSession:
     async def ping(self, target: object) -> MultiPingResult:
         """按当前配置 Ping 一个目标。"""
         return await self._pinger(str(target), self.ping_options, backend=self.ping_backend)
+
+    async def ping_size(
+        self,
+        target: object,
+        size: int,
+        *,
+        df: bool = False,
+    ) -> MultiPingResult:
+        """按**指定载荷大小** Ping 一次（路径 MTU 探测用）。
+
+        两个刻意的偏离配置之处：
+
+        * 只发 2 个包、超时也更短（``MTU_PROBE_TIMEOUT_S``）：二分探测要跑十来次，
+          沿用"每目标 4 包 × 1 秒"会让一次检查变成几十秒；留 2 包是因为公网路径上
+          单个 ICMP 包会偶发丢失，一发定生死会把丢包误判成"大包不通"；
+        * ``df=True`` 时**不用** ``--ping-backend`` 指定的后端，而是换成支持 DF 的那个
+          （``icmplib`` 做不到）。否则默认后端会让 MTU 检查直接失效 —— 那不是"没发现问题"，
+          而是"没测"，两者不能混。
+        """
+        options = replace(
+            self.ping_options,
+            payload_size=size,
+            count=min(self.ping_options.count, MTU_PROBE_COUNT),
+            timeout_s=min(self.ping_options.timeout_s, MTU_PROBE_TIMEOUT_S),
+            dont_fragment=df,
+        )
+        backend = self.df_backend() if df else self.ping_backend
+        return await self._pinger(str(target), options, backend=backend)
+
+    def df_backend(self) -> Backend:
+        """能设置 DF 的后端（``icmplib`` 不支持，按平台选另一个）。"""
+        if self.ping_backend in {Backend.AUTO, Backend.ICMPLIB}:
+            return Backend.WINDOWS_ICMP if sys.platform == "win32" else Backend.SYSTEM
+        return self.ping_backend
 
     def egress(self, target: object) -> Egress:
         """查这次探测从哪个接口出去（校园网里这条证据经常比"通不通"更关键）。

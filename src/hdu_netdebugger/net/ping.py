@@ -82,6 +82,12 @@ class PingOptions:
     payload_size: int = 32
     ttl: int = 64
     interval_s: float = 0.2
+    #: 是否设置 DF（Don't Fragment）。
+    #:
+    #: 路径 MTU 探测必须用它：设了 DF 之后，超过路径 MTU 的包会被丢弃并（**理论上**）
+    #: 回一个 ICMP "需要分片" —— 如果被静默丢弃、什么也不回，那就是 MTU 黑洞。
+    #: ``icmplib`` 后端做不到这件事，会被显式拒绝（见 :func:`_icmplib_ping`）。
+    dont_fragment: bool = False
 
 
 #: AUTO 模式下探测成功的后端，避免每次都走一遍失败路径
@@ -193,9 +199,12 @@ async def _run_backend(backend: Backend, address: str, opts: PingOptions) -> Mul
 
 #: ``IP_STATUS`` 取值（``ipexport.h``）
 _IP_SUCCESS = 0
+_IP_PACKET_TOO_BIG = 11009
 _IP_REQ_TIMED_OUT = 11010
 _IP_UNREACHABLE = frozenset({11002, 11003, 11004, 11005, 11018})
 _IP_TTL_EXPIRED = frozenset({11013, 11014})
+#: ``IP_FLAG_DF``（``ipexport.h``）
+_IP_FLAG_DF = 0x02
 
 
 def _ipaddr_network_order(address: str) -> int:
@@ -268,7 +277,11 @@ def _windows_icmp_ping(address: str, opts: PingOptions) -> MultiPingResult:
         reply_capacity = ctypes.sizeof(IcmpEchoReply) + len(payload) + 8
         reply_buffer = ctypes.create_string_buffer(reply_capacity)
         request_options = IpOptionInformation(
-            Ttl=opts.ttl, Tos=0, Flags=0, OptionsSize=0, OptionsData=None
+            Ttl=opts.ttl,
+            Tos=0,
+            Flags=_IP_FLAG_DF if opts.dont_fragment else 0,
+            OptionsSize=0,
+            OptionsData=None,
         )
         timeout_ms = max(1, round(opts.timeout_s * 1000))
         try:
@@ -333,6 +346,14 @@ def _classify_windows_reply(
         )
     if status == _IP_REQ_TIMED_OUT:
         return PingReply(sequence=sequence, status=PingStatus.TIMEOUT)
+    if status == _IP_PACKET_TOO_BIG:
+        # 路径 MTU 探测里这是**好消息**：中间设备回了"需要分片"，说明 MTU 只是偏小、
+        # 不是黑洞（黑洞的表现是静默超时，什么也不回）。
+        return PingReply(
+            sequence=sequence,
+            status=PingStatus.UNREACHABLE,
+            error="ICMP 需要分片（包超过路径 MTU）",
+        )
     if status in _IP_UNREACHABLE or status in _IP_TTL_EXPIRED:
         return PingReply(
             sequence=sequence, status=PingStatus.UNREACHABLE, error=f"IP_STATUS={status}"
@@ -347,6 +368,9 @@ def _classify_windows_reply(
 
 def _icmplib_ping(address: str, opts: PingOptions) -> MultiPingResult:
     """借助 icmplib 的低层套接字逐包发送。"""
+    if opts.dont_fragment:
+        # 显式拒绝而不是悄悄忽略：忽略会让 MTU 探测得出"一切正常"的假结论。
+        raise BackendUnavailable("icmplib 后端不支持 DF（不分片）探测")
     try:
         from icmplib import (  # noqa: PLC0415 - 可选后端，延迟导入
             ICMPRequest,
@@ -480,7 +504,7 @@ def _system_ping_args(address: str, opts: PingOptions) -> list[str]:
     """按平台拼装 ``ping`` 参数。"""
     timeout_ms = max(1, round(opts.timeout_s * 1000))
     if sys.platform == "win32":
-        return [
+        args = [
             "-n",
             str(opts.count),
             "-w",
@@ -489,10 +513,12 @@ def _system_ping_args(address: str, opts: PingOptions) -> list[str]:
             str(opts.payload_size),
             "-i",
             str(opts.ttl),
-            address,
         ]
+        if opts.dont_fragment:
+            args.append("-f")
+        return [*args, address]
     if sys.platform == "darwin":
-        return [
+        args = [
             "-c",
             str(opts.count),
             "-W",
@@ -503,9 +529,11 @@ def _system_ping_args(address: str, opts: PingOptions) -> list[str]:
             str(opts.ttl),
             "-i",
             str(opts.interval_s),
-            address,
         ]
-    return [
+        if opts.dont_fragment:
+            args.append("-D")  # macOS: 设置 DF
+        return [*args, address]
+    args = [
         "-c",
         str(opts.count),
         "-W",
@@ -516,8 +544,10 @@ def _system_ping_args(address: str, opts: PingOptions) -> list[str]:
         str(opts.ttl),
         "-i",
         str(opts.interval_s),
-        address,
     ]
+    if opts.dont_fragment:
+        args.extend(["-M", "do"])  # Linux: 禁止分片
+    return [*args, address]
 
 
 def _parse_system_ping(address: str, output: str, opts: PingOptions) -> MultiPingResult:

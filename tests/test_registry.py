@@ -59,8 +59,13 @@ class TestBuiltinRegistry:
         "检查认证状态",
         "检查运营商网关可达性",
         "检查公网可达性",
+        "检查路径MTU",
     ]
-    BUILTIN_ORDERS: ClassVar[list[int]] = [-1, 5, 10, 15, 20, 25, 30, 35]
+    #: 前 8 项的 order 与原版一一对应（`-1/5/.../35` 是原版的执行顺序，不能改）；
+    #: 本复刻新增的能力排在后面，避免插进原版序列里改变既有执行次序。
+    BUILTIN_ORDERS: ClassVar[list[int]] = [-1, 5, 10, 15, 20, 25, 30, 35, 37]
+    #: 原版 8 项的顺序（用于单独钉住"没有改动原版次序"）
+    ORIGINAL_ORDERS: ClassVar[list[int]] = [-1, 5, 10, 15, 20, 25, 30, 35]
 
     def builtin(self) -> list[CheckerSpec]:
         return [
@@ -74,6 +79,12 @@ class TestBuiltinRegistry:
 
     def test_orders_match_original(self) -> None:
         assert [spec.order for spec in self.builtin()] == self.BUILTIN_ORDERS
+
+    def test_original_orders_are_untouched(self) -> None:
+        """新增检查项只能排在原版 8 项之后，不能改变原版的执行次序。"""
+        assert [spec.order for spec in self.builtin()][: len(self.ORIGINAL_ORDERS)] == (
+            self.ORIGINAL_ORDERS
+        )
 
     def test_only_isp_check_has_condition(self) -> None:
         conditioned = {spec.name: [c.name for c in spec.conditions] for spec in self.builtin()}

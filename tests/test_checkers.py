@@ -15,6 +15,7 @@ from hdu_netdebugger.checkers.bas import BASCheck
 from hdu_netdebugger.checkers.dns import DNSCheck
 from hdu_netdebugger.checkers.get_info import GetInfoCheck
 from hdu_netdebugger.checkers.isp import ISPCheck
+from hdu_netdebugger.checkers.mtu import MtuCheck
 from hdu_netdebugger.checkers.proxy import (
     ProxyCheck,
     ProxyHit,
@@ -40,13 +41,14 @@ from hdu_netdebugger.context import CheckContext
 from hdu_netdebugger.models.enums import CheckResultStatus
 from hdu_netdebugger.models.interface import InterfaceInfo, InterfaceKind
 from hdu_netdebugger.net.dns import DnsResult
-from hdu_netdebugger.net.ping import Backend
+from hdu_netdebugger.net.mtu import MAX_PROBE_PAYLOAD
+from hdu_netdebugger.net.ping import Backend, BackendUnavailable
 from hdu_netdebugger.net.routes import DefaultRoute, RouteInfo
+from hdu_netdebugger.session import RunSession
 from tests.fakes import FakeHttp, FakePinger, FakeRouter, make_session, srun_jsonp
 
 if TYPE_CHECKING:
     from hdu_netdebugger.models.result import CheckResult
-    from hdu_netdebugger.session import RunSession
 
 PROXY_URL = "http://127.0.0.1:7890"
 
@@ -1366,6 +1368,87 @@ class TestISPCheck:
 # ---------------------------------------------------------------------------
 # 代理
 # ---------------------------------------------------------------------------
+
+
+class TestMtuCheck:
+    """路径 MTU：小包通、大包不通那类故障（实测校园目标 996 字节以上全丢）。"""
+
+    @staticmethod
+    def _pinger() -> FakePinger:
+        """三个目标都健康；需要时再单独覆盖某个目标的边界。"""
+        pinger = FakePinger()
+        for target in (BAS_IP, SRUN_IP, ALI_DNS_IP):
+            pinger.set_mtu_edge(str(target), MAX_PROBE_PAYLOAD)
+        return pinger
+
+    async def test_healthy_path_passes(self) -> None:
+        result = await run_check(MtuCheck, make_session(pinger=self._pinger()))
+
+        assert result.status is CheckResultStatus.PASS
+        assert "未发现路径 MTU 问题" in result.summary
+
+    async def test_silent_drop_is_warned_as_blackhole(self) -> None:
+        """有上限但从不回"需要分片" —— 处置与"只是 MTU 偏小"不同。"""
+        pinger = self._pinger()
+        pinger.set_mtu_edge(str(SRUN_IP), 996)
+
+        result = await run_check(MtuCheck, make_session(pinger=pinger))
+
+        assert result.status is CheckResultStatus.WARN
+        assert any("静默丢弃" in item and "996" in item for item in result.warnings)
+        assert any("大包被静默丢弃" in item for item in result.suggestions)
+
+    async def test_frag_needed_is_worded_differently(self) -> None:
+        """中间设备回了"需要分片"时不该说成黑洞。"""
+        pinger = self._pinger()
+        pinger.set_mtu_edge(str(SRUN_IP), 1400, frag_needed=True)
+
+        result = await run_check(MtuCheck, make_session(pinger=pinger))
+
+        assert any("有回 ICMP 需要分片" in item for item in result.warnings)
+        assert not any("静默丢弃" in item for item in result.warnings)
+
+    async def test_unreachable_target_does_not_break_the_check(self) -> None:
+        result = await run_check(MtuCheck, make_session(pinger=FakePinger()))
+
+        assert result.status is CheckResultStatus.WARN
+        assert "未发现路径 MTU 受限" in result.summary
+
+    async def test_tunnel_egress_is_annotated(self) -> None:
+        """有 TUN 时这类测量会被隧道污染，必须标注而不是沉默。"""
+        tunnel = RouteInfo(interface_index=75, metric=0)
+        session = make_session(
+            pinger=self._pinger(),
+            router=FakeRouter({str(BAS_IP): tunnel, str(SRUN_IP): tunnel, str(ALI_DNS_IP): tunnel}),
+            interfaces=[
+                InterfaceInfo(
+                    name="Mihomo",
+                    description="Meta Tunnel",
+                    kind=InterfaceKind.PROP_VIRTUAL,
+                    is_up=True,
+                    index=75,
+                )
+            ],
+        )
+
+        result = await run_check(MtuCheck, session)
+
+        assert any("经由隧道类接口出站" in item for item in result.warnings)
+
+    async def test_missing_df_backend_is_reported(self) -> None:
+        """后端不支持 DF 时必须说"没测"，而不是悄悄给出"没问题"。"""
+
+        class _NoDfSession(RunSession):
+            async def ping_size(self, *_args: Any, **_kwargs: Any) -> Any:
+                raise BackendUnavailable("icmplib 后端不支持 DF（不分片）探测")
+
+        session = _NoDfSession(router=FakeRouter(), interfaces=[])
+
+        result = await run_check(MtuCheck, session)
+
+        assert result.status is CheckResultStatus.WARN
+        assert "无法进行路径 MTU 探测" in result.summary
+        assert any("--ping-backend" in item for item in result.suggestions)
 
 
 class TestProxyCheck:
