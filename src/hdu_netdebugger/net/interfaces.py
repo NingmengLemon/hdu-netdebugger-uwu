@@ -14,6 +14,7 @@ from __future__ import annotations
 import ctypes
 import socket
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from hdu_netdebugger.models.interface import InterfaceInfo, InterfaceKind
@@ -360,6 +361,7 @@ def _psutil_interfaces() -> list[InterfaceInfo]:
     except (OSError, RuntimeError):  # pragma: no cover - 依赖平台
         return []
 
+    dns_servers = _posix_dns_servers()
     interfaces: list[InterfaceInfo] = []
     for name, entries in addresses.items():
         ipv4 = tuple(item.address for item in entries if item.family == socket.AF_INET)
@@ -367,6 +369,10 @@ def _psutil_interfaces() -> list[InterfaceInfo]:
             item.address.split("%", 1)[0] for item in entries if item.family == socket.AF_INET6
         )
         stat = stats.get(name)
+        mac = next(
+            (item.address for item in entries if item.family == psutil.AF_LINK and item.address),
+            None,
+        )
         interfaces.append(
             InterfaceInfo(
                 name=name,
@@ -377,9 +383,44 @@ def _psutil_interfaces() -> list[InterfaceInfo]:
                 ipv6=ipv6,
                 mtu=int(stat.mtu) if stat is not None and stat.mtu > 0 else None,
                 speed_mbps=int(stat.speed) if stat is not None and stat.speed > 0 else None,
+                index=_safe_if_index(name),
+                # DNS 是**系统级**配置（Linux 上不属于某一块网卡），所以每个接口都带上它：
+                # 检查 1 与检查 5 要回答的是"这台机器在用哪个 DNS"。
+                # 实测在教学区 Linux 上，这台机器的 resolv.conf 是 210.32.32.1 + 210.32.32.10。
+                dns_servers=dns_servers,
+                mac=mac.lower() if mac else None,
             )
         )
     return interfaces
+
+
+def _posix_dns_servers() -> tuple[str, ...]:
+    """读 ``/etc/resolv.conf`` 里的 nameserver（psutil 不提供 DNS 配置）。
+
+    只解析 ``nameserver`` 行，忽略注释；读不到就返回空元组（宁缺勿猜）。
+    """
+    try:
+        lines = Path("/etc/resolv.conf").read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ()
+
+    servers: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("#", ";")):
+            continue
+        parts = stripped.split()
+        if len(parts) >= 2 and parts[0] == "nameserver" and parts[1] not in servers:
+            servers.append(parts[1])
+    return tuple(servers)
+
+
+def _safe_if_index(name: str) -> int | None:
+    """接口名 → 系统索引（失败就返回 ``None``：拿不到不影响其它证据）。"""
+    try:
+        return socket.if_nametoindex(name)
+    except OSError:
+        return None
 
 
 def _guess_kind(name: str, ipv4: Iterable[str]) -> InterfaceKind:

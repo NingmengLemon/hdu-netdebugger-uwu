@@ -175,6 +175,62 @@ class TestGetInfoCheck:
         assert "默认网关: 10.150.0.1" in details
         assert "DNS 服务器: 210.32.32.1" in details
 
+    async def test_wireless_only_host_is_accepted(
+        self,
+        session: RunSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """只有无线网卡的机器不能判"未找到符合条件的网络接口"。
+
+        实测（教学区 Linux 笔记本，`wlp87s0` / `10.249.76.11`）：教学区与 eduroam 本来就以
+        无线为主，只认以太网会让检查 1 直接失败，连带丢掉网段识别与全部 IP 配置证据。
+        """
+        monkeypatch.setattr(
+            "hdu_netdebugger.checkers.get_info.list_interfaces",
+            lambda: [
+                InterfaceInfo(
+                    name="wlp87s0",
+                    description="wlp87s0",
+                    kind=InterfaceKind.WIRELESS,
+                    is_up=True,
+                    ipv4=("10.249.76.11",),
+                    ipv6=("fe80::c118:7b52:bbdb:c9f4",),
+                    gateway="10.249.0.1",
+                    dns_servers=("210.32.32.1", "210.32.32.10"),
+                )
+            ],
+        )
+
+        result = await run_check(GetInfoCheck, session)
+
+        assert result.status is CheckResultStatus.PASS
+        assert result.summary == "检测到教学区网络"
+        assert session.context.network_kind is NetworkKind.CAMPUS
+        assert "默认网关: 10.249.0.1" in (result.details or "")
+
+    async def test_no_usable_interface_message_mentions_wireless(
+        self,
+        session: RunSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            "hdu_netdebugger.checkers.get_info.list_interfaces",
+            lambda: [
+                InterfaceInfo(
+                    name="wlp87s0",
+                    description="wlp87s0",
+                    kind=InterfaceKind.WIRELESS,
+                    is_up=False,
+                    ipv4=(),
+                )
+            ],
+        )
+
+        result = await run_check(GetInfoCheck, session)
+
+        assert result.status is CheckResultStatus.FAIL
+        assert any("有线或无线" in item for item in result.warnings)
+
     async def test_logs_the_default_route_table(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -1129,6 +1185,41 @@ class TestAuthCheck:
         assert result.status is CheckResultStatus.FAIL
         assert "HTTPS 失败" in (result.details or "")
 
+    async def test_transport_failure_is_distinguished_from_unreachable(
+        self,
+        session: RunSession,
+        fake_http: FakeHttp,
+        pinger: FakePinger,
+        ok_url: str,
+    ) -> None:
+        """ICMP 通、80/443 不通要单独说出来（教学区实测就是这种）。
+
+        实测：教学区里到 `192.168.112.97` 的 ICMP 4/4 通、DNS 也正确，但 HTTPS 与明文
+        都是 `ConnectError`。只报"认证请求失败"看不出是网络层还是传输层的问题。
+        """
+        session.context.dns_available = True
+        fake_http.add(ok_url, error="ConnectError: All connection attempts failed")
+        pinger.set_reachable(str(SRUN_IP))
+
+        result = await run_check(AuthCheck, session)
+
+        assert result.status is CheckResultStatus.FAIL
+        assert any("网络层可达但传输层不通" in item for item in result.warnings)
+        assert any("80/443" in item for item in result.suggestions)
+
+    async def test_transport_failure_without_icmp_points_at_reachability(
+        self,
+        session: RunSession,
+        fake_http: FakeHttp,
+        ok_url: str,
+    ) -> None:
+        session.context.dns_available = True
+        fake_http.add(ok_url, error="ConnectError: All connection attempts failed")
+
+        result = await run_check(AuthCheck, session)
+
+        assert any("网络层不可达" in item for item in result.suggestions)
+
     async def test_logs_the_portal_page_redirect(
         self,
         session: RunSession,
@@ -1417,6 +1508,29 @@ class TestMtuCheck:
 
         assert any("有回 ICMP 需要分片" in item for item in result.warnings)
         assert not any("静默丢弃" in item for item in result.warnings)
+
+    async def test_public_baseline_limited_changes_the_advice(self) -> None:
+        """公网对照目标也受限时，不能说成"校园链路的问题"。
+
+        实测（教学区无线）：BAS 与公网对照都卡在 996 字节，而深澜能过 1472，
+        限制是按目的地分的，不在某一段链路上。
+        """
+        pinger = self._pinger()
+        for target in (BAS_IP, SRUN_IP, ALI_DNS_IP):
+            pinger.set_mtu_edge(str(target), 996)
+
+        result = await run_check(MtuCheck, make_session(pinger=pinger))
+
+        assert any("连公网对照目标" in item for item in result.suggestions)
+        assert not any("只有校园目标受限" in item for item in result.suggestions)
+
+    async def test_campus_only_limit_blames_the_campus_side(self) -> None:
+        pinger = self._pinger()
+        pinger.set_mtu_edge(str(SRUN_IP), 996)
+
+        result = await run_check(MtuCheck, make_session(pinger=pinger))
+
+        assert any("只有校园目标受限" in item for item in result.suggestions)
 
     async def test_unreachable_target_does_not_break_the_check(self) -> None:
         result = await run_check(MtuCheck, make_session(pinger=FakePinger()))

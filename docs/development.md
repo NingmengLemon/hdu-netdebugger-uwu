@@ -46,7 +46,7 @@ uv run pytest
 - **[uv](https://docs.astral.sh/uv/)** — 依赖与虚拟环境管理
 - **[ruff](https://docs.astral.sh/ruff/)** — lint + format（替代 flake8 / black / isort），`select = ["ALL"]` + 逐条说明理由的 ignore
 - **[ty](https://docs.astral.sh/ty/)** — 类型检查（替代 mypy / pyright）
-- **pytest + pytest-asyncio + coverage** — 668 个用例，覆盖率门槛 80%（当前 ~93%）
+- **pytest + pytest-asyncio + coverage** — 677 个用例，覆盖率门槛 80%（当前 ~93%）
 
 所有网络调用都通过 `RunSession` 注入，因此**检查项**测试用 `tests/fakes.py` 里的
 `FakePinger` / `FakeHttp` / `FakeRouter` / `FakeTracer` 就能在毫秒内跑完全部检查项，
@@ -125,12 +125,12 @@ uv run python scripts/gui_smoke.py out.png              # 真跑一轮检查再�
 
 | 平台 | 结果 |
 |------|------|
-| Windows 10 IoT 企业版 LTSC 19044（宿舍区，电信出口） | `ruff` / `ty` 全绿；完整用例通过、1 项平台跳过（覆盖率 ~93%）。11 项检查逐项可达：在路由器后且开着代理时，`获取基本信息` / `检查代理状态` 按设计给出隧道网卡警告；关掉代理后 `检查路径MTU` / `检查IPv6` / `检查逐跳路径` 的实测结论见 [checks.md](checks.md) |
+| Windows 10 IoT 企业版 LTSC 19044（宿舍区有线，电信出口） | `ruff` / `ty` 全绿；完整用例通过、1 项平台跳过（覆盖率 ~93%）。11 项检查逐项可达：在路由器后且开着代理时，`获取基本信息` / `检查代理状态` 按设计给出隧道网卡警告；关掉代理后 `检查路径MTU` / `检查IPv6` / `检查逐跳路径` 的实测结论见 [checks.md](checks.md) |
 | Debian 13 trixie x86_64（Python 3.13 宿主 / venv 3.12） | `ruff` / `ty` 全绿，完整测试套件通过（含离屏 GUI 与 QThread）；非 root 用户下 `SOCK_DGRAM` 非特权 ICMP 正常 |
+| **Linux 笔记本（教学区无线，`10.249.76.11/17`）** | 11 项跑完 7 通过 / 1 警告 / 2 失败 / 1 跳过。Linux 侧的 `/proc/net/route` 出站归属、系统 `traceroute` 解析、`ping -M do` 路径 MTU、`/etc/resolv.conf` 解析都真机跑通；两处失败是网络侧现象（门户 80/443 不通）与检查 1 的无线缺口，后者已修并加回归用例。详见 [checks.md](checks.md) 的教学区实测一节 |
 
 尚未覆盖（**别当成已验证**）：
 
-- macOS 分支（`ping -W <ms> -m <ttl>`）按 `ping(8)` 语义实现，参数拼装（含 BSD 的毫秒与
-  GNU 的秒之差）已用改 `sys.platform` 的方式单测覆盖，但**没有真机跑过**；
-- IPv6 检查的"有 v6 地址"正向分支（现有网络没有全局 IPv6 与校园 v6 出口）；
-- 教学区的 BAS / 认证测试点与 Linux 上的路径 MTU / 逐跳实测。
+- macOS 分支（`ping -W <ms> -m <ttl>` 与 `ping6`）按 `ping(8)` 语义实现，参数拼装
+  （含 BSD 的毫秒与 GNU 的秒之差）已用改 `sys.platform` 的方式单测覆盖，但**没有真机跑过**；
+- IPv6 检查的"有 v6 地址"正向分支（两处网络都没有全局 IPv6 与校园 v6 出口）。

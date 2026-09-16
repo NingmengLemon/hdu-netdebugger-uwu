@@ -40,6 +40,7 @@ class AuthCheck(Checker):
             response = await self._retry_over_plain_http(host, response)
         if response.error is not None:
             self.add_warning(f"认证请求失败: {response.error}")
+            await self._explain_transport_failure()
             self.add_suggestion("请检查网络连通性，或联系ICU并提供错误信息")
             self.failed("认证状态查询失败")
             return
@@ -71,6 +72,31 @@ class AuthCheck(Checker):
         self.add_suggestion(f"请尝试重新认证，网址为 https://{HDU_PORTAL_DOMAIN}")
         self.add_suggestion("如问题依旧，请联系ICU并提供错误信息")
         self.failed("认证状态异常")
+
+    async def _explain_transport_failure(self) -> None:
+        """区分"网络层不通"与"网络层通、但 80/443 不通"。
+
+        实测（教学区，2026-09）：到 `192.168.112.97` 的 ICMP 4/4 通、DNS 也解析正确，
+        但 HTTPS 与明文 HTTP 都是 `ConnectError: All connection attempts failed` ——
+        也就是**网络层可达、传输层被拦**。这种结论靠"认证请求失败"一句话是给不出来的，
+        所以这里补一次 ICMP 探测来区分，并直接给出对应的排查方向。
+        """
+        probe = await self.session.ping(SRUN_IP)
+        self.log(f"补充探测: 对 {SRUN_IP} 的 ICMP 成功 {probe.success_count}/{probe.total_count}")
+        if not probe.success_count:
+            self.add_suggestion(
+                f"到 {SRUN_IP} 的 ICMP 也不通，属于网络层不可达：先看检查 4（深澜可达性）"
+            )
+            return
+
+        self.add_warning(
+            f"网络层可达但传输层不通：ICMP 到 {SRUN_IP} 正常、DNS 解析也正常，"
+            "但 TCP 80 与 443 都连不上"
+        )
+        self.add_suggestion(
+            "这种「ICMP 通、Web 端口不通」通常是所在网段到门户的 80/443 被策略拦下，"
+            "或门户只在特定网段提供服务；请把这条结论（连同所在区域）反馈给 ICU"
+        )
 
     async def _retry_over_plain_http(self, host: str, failed: HttpResponse) -> HttpResponse:
         """HTTPS 走不通时，用明文 HTTP 再试一次。

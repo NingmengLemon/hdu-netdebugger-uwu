@@ -118,8 +118,20 @@ class MtuCheck(Checker):
                 "大包被静默丢弃时，症状通常是「能上 QQ / ping 通，但网页、下载、视频卡住」；"
                 "可先关掉 VPN / 代理再测一次，确认不是隧道或代理造成的"
             )
-        self.add_suggestion(
-            "若这是校园链路的问题（公网对照目标正常、校园目标受限），请把结论反馈给 ICU / 维护者："
-            "本工具只能给出边界，改不了中间的设备"
-        )
+
+        # 公网对照目标也是一样受限时，"校园链路有问题"这个推论就不成立了：
+        # 实测在教学区（无线）BAS 与公网对照都卡在 996 字节，而深澜却能过 1472，
+        # 说明限制是按目的地分的，不在某一段链路上。
+        baseline_label = _TARGETS[-1][0]
+        baseline_limited = any(label == baseline_label for label, _ in limited)
+        if baseline_limited:
+            self.add_suggestion(
+                f"连公网对照目标（{baseline_label}）也同样受限，说明限制不只在校园链路这一段："
+                "更可能在本机接入链路或更上游，请连着「哪个目标受限、哪个不受限」一起反馈"
+            )
+        else:
+            self.add_suggestion(
+                "公网对照目标正常、只有校园目标受限，问题更可能在校园侧；"
+                "请把结论反馈给 ICU / 维护者：本工具只能给出边界，改不了中间的设备"
+            )
         self.warned(f"检测到路径 MTU 受限（{len(limited)} 个目标）")

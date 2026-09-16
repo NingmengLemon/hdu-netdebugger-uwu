@@ -93,8 +93,13 @@ class PathCheck(Checker):
                 continue
             last = result.last_answering
             if reachable:
-                # 目标 ping 得通、只是沿途不回 TTL 超时：拿不到证据，不是故障
-                self.log(f"[{label}] 沿途设备不回 TTL 超时（目标本身可达），跳数不可得；这不是故障")
+                # 目标 ping 得通、但那一跳没被观测到：拿不到完整路径，不是故障。
+                # 可能原因：目标不回 TTL 超时 ICMP，或跳数超出上限。
+                answered = len(result.answered_hops)
+                self.log(
+                    f"[{label}] 目标本身可达，但逐跳里没有观测到它那一跳"
+                    f"（沿途 {answered} 跳有应答）：拿不到完整路径，不是故障"
+                )
                 continue
             if last is None:
                 self.log(f"[{label}] 目标不可达且沿途没有任何应答，无法定位断点")
@@ -117,5 +122,5 @@ class PathCheck(Checker):
             return
 
         hops = "、".join(f"{label} {item.hop_count} 跳" for label, item, _ in reached)
-        detail = f"（{hops}）" if hops else "（沿途不回 TTL 超时，跳数不可得）"
+        detail = f"（{hops}）" if hops else "（目标本身可达，但未观测到它那一跳）"
         self.passed(f"路径未见异常{detail}")

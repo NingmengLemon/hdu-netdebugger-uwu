@@ -123,7 +123,7 @@ uv run python scripts/dist_smoke.py      # 打完必须跑一遍产物自检
 
 ## 质量
 
-`ruff`（`select = ["ALL"]` + 逐条说明理由的 ignore）+ `ty` 类型检查 + pytest（**668 个用例**，
+`ruff`（`select = ["ALL"]` + 逐条说明理由的 ignore）+ `ty` 类型检查 + pytest（**677 个用例**，
 覆盖率门槛 80%，当前 ~93%）+ GitHub Actions（lint / test / build wheel / 冻结产物自检）。
 检查项测试全部注入假网络（`tests/fakes.py`），毫秒级跑完、不产生真实流量。
 

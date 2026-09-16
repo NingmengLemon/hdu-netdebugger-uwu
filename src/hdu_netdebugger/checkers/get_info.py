@@ -57,10 +57,15 @@ class GetInfoCheck(Checker):
         found_any = False
 
         for interface in interfaces:
-            usable_ethernet = (
-                interface.kind is InterfaceKind.ETHERNET and interface.ipv4 and interface.is_up
+            # 有线与无线都算"可用接入"：教学区与 eduroam 本来就以无线为主，
+            # 只认以太网会让只带无线网卡的机器直接判"未找到符合条件的网络接口"，
+            # 连带丢掉了网段识别与全部 IP 配置证据（实测在教学区就是这样失败的）。
+            usable = (
+                interface.kind in {InterfaceKind.ETHERNET, InterfaceKind.WIRELESS}
+                and bool(interface.ipv4)
+                and interface.is_up
             )
-            if usable_ethernet:
+            if usable:
                 found_any = True
                 self.log_lines(interface.describe())
                 self.log_lines(interface.describe_config())
@@ -76,7 +81,7 @@ class GetInfoCheck(Checker):
                         )
             elif interface.kind is InterfaceKind.ETHERNET and not interface.is_up:
                 # 链路没建立的有线网卡也要打出来：群里有过"网线明明插着、系统却说没插"，
-                # 最后靠把协商速率手动降到 100M 才通的案例 —— 那种情况下
+                # 最后靠把协商速率手动降到 100M 才通的案例，那种情况下
                 # 唯一的证据就是这块网卡自己（是否链路 up、协商到多少）
                 self.log(f"有线网卡 {interface.name} 链路未建立：")
                 self.log_lines(interface.describe_config())
@@ -85,7 +90,7 @@ class GetInfoCheck(Checker):
                 self._report_tunnel(interface)
 
         if not found_any:
-            self.add_warning("未找到符合条件的网络接口（以太网且已启用且有IPv4地址）")
+            self.add_warning("未找到符合条件的网络接口（有线或无线、已启用、且有 IPv4 地址）")
             self.failed("未找到符合条件的网络接口")
             return
 

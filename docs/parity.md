@@ -10,7 +10,7 @@
 | `DnsClient` | `dnspython` 异步解析器，可指定 DNS 服务器 |
 | `HttpClient` | `httpx.AsyncClient`（默认不跟随重定向、不保留 Cookie） |
 | MVVM + Avalonia | Typer CLI（主）+ PySide6 可选 GUI |
-| 无测试 | 668 个 pytest 用例 + GitHub Actions CI |
+| 无测试 | 677 个 pytest 用例 + GitHub Actions CI |
 
 检查项本身：原版 8 项全部复刻（`order` 一一对应），另有 3 项新增（路径 MTU / IPv6 /
 逐跳路径，`order` 排在原版之后），见 [checks.md](checks.md)。
