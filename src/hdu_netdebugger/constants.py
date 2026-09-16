@@ -16,6 +16,8 @@ __all__ = [
     "BAS_IP",
     "CAMPUS_NETWORK",
     "DEFAULT_PING_COUNT",
+    "DNS_INTERCEPTION_PROBE_IP",
+    "DNS_INTERCEPTION_TIMEOUT_S",
     "DORM_NETWORK",
     "HDU_DNS_IP",
     "HDU_PORTAL_DOMAIN",
@@ -65,6 +67,18 @@ HDU_PORTAL_DOMAIN: Final = "portal.hdu.edu.cn"
 HDU_PORTAL_ROUTE: Final = "/cgi-bin/rad_user_info?callback=jQuery"
 #: 杭电 DNS
 HDU_DNS_IP: Final = IPv4Address("210.32.32.1")
+
+#: DNS 接管检测用的"不可路由"地址（RFC 5737 TEST-NET-1）。
+#:
+#: 正常情况下向它发查询只会超时；如果它居然答出了 portal.hdu.edu.cn 的 A 记录，
+#: 说明本机的 UDP/53 被本地接管了（TUN 的 fake-IP、dnsmasq、代理的 DNS 劫持…），
+#: 此时"校园 DNS 可用"这个结论根本不成立 —— 实测本机就是这样：向 192.0.2.53
+#: 查询同样返回了 192.168.112.97，且 TTL 与正规查询完全一致。
+DNS_INTERCEPTION_PROBE_IP: Final = IPv4Address("192.0.2.53")
+
+#: 接管检测的超时（秒）。这个数字是"每次 DNS 检查要多花多久"的直接成本，
+#: 宁可短一点：被接管时会立刻答，超时即表示没有接管。
+DNS_INTERCEPTION_TIMEOUT_S: Final = 1.0
 
 
 def dorm_or_campus(address: IPv4Address) -> NetworkKind | None:

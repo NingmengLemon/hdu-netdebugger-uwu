@@ -20,6 +20,7 @@ from hdu_netdebugger.session import RunSession
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
 
+    from hdu_netdebugger.models.interface import InterfaceInfo
     from hdu_netdebugger.net.ping import Backend, PingOptions
     from hdu_netdebugger.net.routes import RouteInfo
 
@@ -165,12 +166,13 @@ def make_session(
     pinger: FakePinger | None = None,
     http: FakeHttp | None = None,
     router: FakeRouter | None = None,
+    interfaces: Sequence[InterfaceInfo] = (),
     **config_overrides: Any,
 ) -> RunSession:
     """构造注入了假网络的 session。
 
-    默认连路由查询也换成替身：否则每个检查项测试都会去调真实的 ``GetBestRoute``
-    并枚举一次真实网卡，既慢又让测试依赖跑测机器的网络配置。
+    默认把路由查询与接口列表都换成替身：否则每个检查项测试都会去调真实的
+    ``GetBestRoute`` / 枚举真实网卡，既慢又让测试依赖跑测机器的网络配置。
     """
     return RunSession(
         config=RunConfig(**config_overrides),
@@ -178,6 +180,7 @@ def make_session(
         pinger=pinger or FakePinger(),
         http=http or FakeHttp(),  # ty: ignore[invalid-argument-type]
         router=router or FakeRouter(),
+        interfaces=list(interfaces),
     )
 
 

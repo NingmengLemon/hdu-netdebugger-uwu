@@ -27,7 +27,7 @@ from hdu_netdebugger.models.interface import InterfaceInfo, InterfaceKind
 from hdu_netdebugger.models.ping import MultiPingResult, PingReply
 from hdu_netdebugger.net import interfaces as interfaces_module
 from hdu_netdebugger.net import ping as ping_module
-from hdu_netdebugger.net.dns import DnsResult, query_a
+from hdu_netdebugger.net.dns import DnsResult, query_a, query_a_system
 from hdu_netdebugger.net.http import HttpClient, HttpResponse
 from hdu_netdebugger.net.interfaces import _guess_kind, list_interfaces
 from hdu_netdebugger.net.ping import (
@@ -822,6 +822,32 @@ class TestHttpClient:
 # ---------------------------------------------------------------------------
 # DNS
 # ---------------------------------------------------------------------------
+
+
+class TestQueryASystem:
+    """``query_a_system``：问**系统配置的**解析器，而不是硬编码的校园 DNS。"""
+
+    async def test_returns_system_answer(self, fake_dns: type[_FakeResolver]) -> None:
+        fake_dns.addresses = ["192.168.112.97"]
+
+        result = await query_a_system("portal.hdu.edu.cn")
+
+        assert result.contains("192.168.112.97")
+        assert result.addresses == ["192.168.112.97"]
+
+    async def test_reports_errors(self, fake_dns: type[_FakeResolver]) -> None:
+        fake_dns.error = dns.exception.Timeout()
+
+        result = await query_a_system("portal.hdu.edu.cn", timeout_s=1.0)
+
+        assert result.error is not None
+        assert result.addresses == []
+
+    async def test_marks_an_empty_resolver_list(self, fake_dns: type[_FakeResolver]) -> None:
+        """系统没配任何 DNS 时要说清楚，而不是给出一个空白的 server 字段。"""
+        result = await query_a_system("portal.hdu.edu.cn")
+
+        assert result.server == "(系统未配置)"
 
 
 class TestDnsResult:

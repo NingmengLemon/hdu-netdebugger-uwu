@@ -26,6 +26,7 @@ from hdu_netdebugger.checkers.srun_reachability import SrunReachabilityCheck
 from hdu_netdebugger.constants import (
     ALI_DNS_IP,
     BAS_IP,
+    DNS_INTERCEPTION_PROBE_IP,
     HDU_PORTAL_DOMAIN,
     MIUI_ROM_204_URL,
     SRUN_IP,
@@ -512,29 +513,59 @@ def make_dns_result(
     )
 
 
+def install_dns_queries(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    campus: DnsResult,
+    system: DnsResult | None = None,
+    probe: DnsResult | None = None,
+) -> list[str]:
+    """把 DNS 检查用到的三处查询都换成替身，返回查询过的目标。
+
+    三处是：校园 DNS、系统解析器、接管探测（向不可路由地址）。
+    少打一个补丁，检查项就会去打**真实 DNS** —— 检查项测试必须无真实流量，
+    而这里恰好新增了两条会走网络的查询，所以统一收在一个 helper 里。
+    """
+    calls: list[str] = []
+
+    async def fake_query(_domain: str, server: object, **_kwargs: Any) -> DnsResult:
+        text = str(server)
+        calls.append(text)
+        if text == str(DNS_INTERCEPTION_PROBE_IP):
+            return probe if probe is not None else make_dns_result(error="查询超时（1s）")
+        return campus
+
+    async def fake_system(_domain: str, **_kwargs: Any) -> DnsResult:
+        calls.append("<系统解析器>")
+        return system if system is not None else make_dns_result(error="查询超时（5s）")
+
+    monkeypatch.setattr("hdu_netdebugger.checkers.dns.query_a", fake_query)
+    monkeypatch.setattr("hdu_netdebugger.checkers.dns.query_a_system", fake_system)
+    return calls
+
+
 class TestDNSCheck:
     async def test_correct_answer_passes(
         self,
         session: RunSession,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        async def fake_query(*_args: Any, **_kwargs: Any) -> DnsResult:
-            return make_dns_result(addresses=[str(SRUN_IP)])
-
-        monkeypatch.setattr("hdu_netdebugger.checkers.dns.query_a", fake_query)
+        install_dns_queries(
+            monkeypatch,
+            campus=make_dns_result(addresses=[str(SRUN_IP)]),
+            system=make_dns_result(addresses=[str(SRUN_IP)]),
+        )
         result = await run_check(DNSCheck, session)
         assert result.status is CheckResultStatus.PASS
         assert session.context.dns_available is True
+        assert "DNS 接管检测" in (result.details or "")
 
     async def test_wrong_answer_fails(
         self,
         session: RunSession,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        async def fake_query(*_args: Any, **_kwargs: Any) -> DnsResult:
-            return make_dns_result(addresses=["127.0.0.1"])
-
-        monkeypatch.setattr("hdu_netdebugger.checkers.dns.query_a", fake_query)
+        install_dns_queries(monkeypatch, campus=make_dns_result(addresses=["127.0.0.1"]))
         result = await run_check(DNSCheck, session)
         assert result.status is CheckResultStatus.FAIL
         assert result.summary == "DNS 查询未返回正确的记录"
@@ -545,10 +576,7 @@ class TestDNSCheck:
         session: RunSession,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        async def fake_query(*_args: Any, **_kwargs: Any) -> DnsResult:
-            return make_dns_result(error="查询超时（5s）")
-
-        monkeypatch.setattr("hdu_netdebugger.checkers.dns.query_a", fake_query)
+        install_dns_queries(monkeypatch, campus=make_dns_result(error="查询超时（5s）"))
         result = await run_check(DNSCheck, session)
         assert result.status is CheckResultStatus.FAIL
         assert result.summary == "DNS 查询失败"
@@ -559,10 +587,7 @@ class TestDNSCheck:
         session: RunSession,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        async def fake_query(*_args: Any, **_kwargs: Any) -> DnsResult:
-            return make_dns_result()
-
-        monkeypatch.setattr("hdu_netdebugger.checkers.dns.query_a", fake_query)
+        install_dns_queries(monkeypatch, campus=make_dns_result())
         result = await run_check(DNSCheck, session)
         assert result.summary == "DNS 查询未返回结果"
 
@@ -571,16 +596,101 @@ class TestDNSCheck:
         session: RunSession,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        seen: list[str] = []
-
-        async def fake_query(domain: str, server: object, **_kwargs: Any) -> DnsResult:
-            seen.append(str(server))
-            return make_dns_result(addresses=[str(SRUN_IP)])
-
-        monkeypatch.setattr("hdu_netdebugger.checkers.dns.query_a", fake_query)
+        calls = install_dns_queries(
+            monkeypatch,
+            campus=make_dns_result(addresses=[str(SRUN_IP)]),
+            system=make_dns_result(addresses=[str(SRUN_IP)]),
+        )
         session.config.dns_server = "223.5.5.5"  # ty: ignore[invalid-assignment]
+
         await run_check(DNSCheck, session)
-        assert seen == ["223.5.5.5"]
+
+        assert "223.5.5.5" in calls
+
+    async def test_logs_configured_servers_and_flags_a_mismatch(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """本机配置的 DNS 与工具查询的校园 DNS 不是一回事 —— 要说清楚。"""
+        session = make_session(
+            interfaces=[
+                InterfaceInfo(
+                    name="以太网",
+                    description="Realtek",
+                    kind=InterfaceKind.ETHERNET,
+                    is_up=True,
+                    ipv4=("192.0.2.20",),
+                    dns_servers=("192.0.2.53",),
+                )
+            ]
+        )
+        install_dns_queries(
+            monkeypatch,
+            campus=make_dns_result(addresses=[str(SRUN_IP)]),
+            system=make_dns_result(addresses=[str(SRUN_IP)]),
+        )
+
+        result = await run_check(DNSCheck, session)
+
+        details = result.details or ""
+        assert "系统配置的 DNS 服务器: 192.0.2.53" in details
+        assert "并不在本机配置的 DNS 列表里" in details
+
+    async def test_misconfigured_system_resolver_is_reported(
+        self,
+        session: RunSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """校园 DNS 答对了、但**本机**解析不了 —— 这正是"能连 IP 打不开域名"那类故障。"""
+        install_dns_queries(
+            monkeypatch,
+            campus=make_dns_result(addresses=[str(SRUN_IP)]),
+            system=make_dns_result(error="查询超时（5s）"),
+        )
+
+        result = await run_check(DNSCheck, session)
+
+        assert result.status is CheckResultStatus.WARN
+        assert any("本机 DNS 解析结果不可用" in item for item in result.warnings)
+        assert any("校园 DNS" in item for item in result.suggestions)
+        assert any("hosts" in item for item in result.suggestions)
+        assert session.context.dns_available is True, "校园 DNS 答对了，认证仍可用域名"
+
+    async def test_system_resolver_alone_enables_domain_based_auth(
+        self,
+        session: RunSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """校园 DNS 查不到、但本机自己能解析 → 结论仍是失败，但认证可以用域名。"""
+        install_dns_queries(
+            monkeypatch,
+            campus=make_dns_result(error="查询超时（5s）"),
+            system=make_dns_result(addresses=[str(SRUN_IP)]),
+        )
+
+        result = await run_check(DNSCheck, session)
+
+        assert result.status is CheckResultStatus.FAIL
+        assert session.context.dns_available is True
+
+    async def test_dns_interception_is_reported(
+        self,
+        session: RunSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """本机 DNS 被接管时，"校园 DNS 可用"这个结论根本立不住（实测本机如此）。"""
+        install_dns_queries(
+            monkeypatch,
+            campus=make_dns_result(addresses=[str(SRUN_IP)]),
+            system=make_dns_result(addresses=[str(SRUN_IP)]),
+            probe=make_dns_result(addresses=[str(SRUN_IP)]),
+        )
+
+        result = await run_check(DNSCheck, session)
+
+        assert result.status is CheckResultStatus.WARN
+        assert any("本机 DNS 查询被接管" in item for item in result.warnings)
+        assert any("不代表校园 DNS 正常" in item for item in result.suggestions)
 
 
 # ---------------------------------------------------------------------------

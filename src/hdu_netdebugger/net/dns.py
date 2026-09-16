@@ -18,7 +18,7 @@ import dns.resolver
 if TYPE_CHECKING:
     from ipaddress import IPv4Address
 
-__all__ = ["DnsResult", "query_a"]
+__all__ = ["DnsResult", "query_a", "query_a_system"]
 
 
 @dataclass(slots=True)
@@ -56,15 +56,35 @@ async def query_a(
     *,
     timeout_s: float = 5.0,
 ) -> DnsResult:
-    """向指定 DNS 服务器查询 ``domain`` 的 A 记录。
+    """向**指定**服务器查询 ``domain`` 的 A 记录。
 
     所有 ``dnspython`` 异常都会被收敛成 :attr:`DnsResult.error`。
     """
-    server_text = str(server)
-    result = DnsResult(domain=domain, server=server_text)
-
     resolver = dns.asyncresolver.Resolver(configure=False)
-    resolver.nameservers = [server_text]
+    resolver.nameservers = [str(server)]
+    return await _resolve(resolver, domain, str(server), timeout_s)
+
+
+async def query_a_system(domain: str, *, timeout_s: float = 5.0) -> DnsResult:
+    """用**系统配置的**解析器查询（``configure=True`` 会读注册表 / ``resolv.conf``）。
+
+    为什么需要它：校园网里"域名解析不了、但认证服务器 IP 能通"是一类常见故障，
+    而本工具此前只测硬编码的校园 DNS —— 那只回答了"校园 DNS 好不好"，
+    没有回答"**这台机器**能不能解析 portal.hdu.edu.cn"。
+    """
+    resolver = dns.asyncresolver.Resolver(configure=True)
+    servers = ", ".join(str(item) for item in resolver.nameservers)
+    return await _resolve(resolver, domain, servers or "(系统未配置)", timeout_s)
+
+
+async def _resolve(
+    resolver: dns.asyncresolver.Resolver,
+    domain: str,
+    server_text: str,
+    timeout_s: float,
+) -> DnsResult:
+    """跑一次查询并把异常收敛成 :class:`DnsResult`。"""
+    result = DnsResult(domain=domain, server=server_text)
     resolver.lifetime = timeout_s
     resolver.timeout = min(timeout_s, 2.0)
 

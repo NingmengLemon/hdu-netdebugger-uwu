@@ -19,7 +19,7 @@ from hdu_netdebugger.net.ping import Backend, PingOptions, ping_multiple
 from hdu_netdebugger.net.routes import Egress, RouteInfo, route_for
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Sequence
 
     from hdu_netdebugger.models.interface import InterfaceInfo
     from hdu_netdebugger.models.ping import MultiPingResult
@@ -60,6 +60,7 @@ class RunSession:
         http: HttpClient | None = None,
         pinger: Pinger | None = None,
         router: Router | None = None,
+        interfaces: Sequence[InterfaceInfo] | None = None,
     ) -> None:
         self.config = config or RunConfig()
         self.context = context or CheckContext()
@@ -70,7 +71,10 @@ class RunSession:
         self._http_owned = http is None
         self._pinger = pinger or ping_multiple
         self._router = router or route_for
-        self._interfaces: list[InterfaceInfo] | None = None
+        #: 接口快照：``None`` 表示"还没枚举过"；测试可以直接注入样本
+        self._interfaces: list[InterfaceInfo] | None = (
+            None if interfaces is None else list(interfaces)
+        )
 
     @property
     def http(self) -> HttpClient:
@@ -119,13 +123,21 @@ class RunSession:
             target=text, route=route, interface=self._interface_for(route.interface_index)
         )
 
-    def _interface_for(self, index: int | None) -> InterfaceInfo | None:
-        """按系统接口索引反查接口（接口列表在 session 内缓存一次）。"""
-        if index is None:
-            return None
+    def interfaces(self) -> list[InterfaceInfo]:
+        """本机接口快照（惰性枚举一次并缓存）。
+
+        检查 1 会把结果写进 ``context.interfaces``；但 ``--only 检查DNS可用性``
+        这种单跑场景下 context 是空的，所以这里自己也能拿到。
+        """
         if self._interfaces is None:
             self._interfaces = list_interfaces(include_loopback=True)
-        for item in self._interfaces:
+        return list(self._interfaces)
+
+    def _interface_for(self, index: int | None) -> InterfaceInfo | None:
+        """按系统接口索引反查接口。"""
+        if index is None:
+            return None
+        for item in self.interfaces():
             if item.index == index:
                 return item
         return None
